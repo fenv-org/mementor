@@ -34,9 +34,6 @@ jobs:
       - name: Check formatting
         run: cargo fmt --check
 
-      - name: Build
-        run: cargo build
-
       - name: Clippy
         run: cargo clippy -- -D warnings
 
@@ -61,8 +58,8 @@ jobs:
           rustup component add clippy rustfmt
           rustup target add x86_64-apple-darwin
 
-      - name: Build (x86_64)
-        run: cargo build --target x86_64-apple-darwin
-
       - name: Clippy (x86_64)
         run: cargo clippy --target x86_64-apple-darwin -- -D warnings
+
+      - name: Test (x86_64 via Rosetta 2)
+        run: cargo test --target x86_64-apple-darwin
