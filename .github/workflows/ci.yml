@@ -19,16 +19,29 @@ jobs:
     runs-on: macos-latest
     name: macOS (${{ matrix.arch }})
 
+    env:
+      ORT_DYLIB_PATH: ${{ matrix.ort-dylib-path }}
+
     strategy:
       fail-fast: false
       matrix:
         include:
           - arch: aarch64
-            target-flag: ""
             cache-key-prefix: macos-aarch64
+            cargo-target: ""
+            ort-dylib-path: ""
+            extra-rustup: ""
+            setup-ort: "true"
+            check-fmt: "cargo fmt --check"
           - arch: x86_64
-            target-flag: "--target x86_64-apple-darwin"
             cache-key-prefix: macos-x86_64
+            cargo-target: "--target x86_64-apple-darwin"
+            ort-dylib-path: "/usr/local/lib/libonnxruntime.dylib"
+            extra-rustup: "rustup target add x86_64-apple-darwin"
+            setup-ort: |
+              arch -x86_64 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+              arch -x86_64 /usr/local/bin/brew install onnxruntime
+            check-fmt: "true"
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -40,26 +53,18 @@ jobs:
           cache-key-prefix: ${{ matrix.cache-key-prefix }}
 
       - name: Install Rust components
-        run: rustup component add clippy rustfmt
-
-      - name: Add cross-compile target
-        if: matrix.arch == 'x86_64'
-        run: rustup target add x86_64-apple-darwin
-
-      - name: Install x86_64 ONNX Runtime via Homebrew
-        if: matrix.arch == 'x86_64'
         run: |
-          arch -x86_64 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-          arch -x86_64 /usr/local/bin/brew install onnxruntime
+          rustup component add clippy rustfmt
+          ${{ matrix.extra-rustup }}
+
+      - name: Setup ONNX Runtime
+        run: ${{ matrix.setup-ort }}
 
       - name: Check formatting
-        if: matrix.arch == 'aarch64'
-        run: cargo fmt --check
+        run: ${{ matrix.check-fmt }}
 
       - name: Clippy
-        run: cargo clippy ${{ matrix.target-flag }} -- -D warnings
+        run: cargo clippy ${{ matrix.cargo-target }} -- -D warnings
 
       - name: Test
-        env:
-          ORT_DYLIB_PATH: ${{ matrix.arch == 'x86_64' && '/usr/local/lib/libonnxruntime.dylib' || '' }}
-        run: cargo test ${{ matrix.target-flag }}
+        run: cargo test ${{ matrix.cargo-target }}
