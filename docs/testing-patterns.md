@@ -7,14 +7,15 @@ subcommands. All new subcommand tests should follow these conventions.
 
 ### Rule 1: Colocated tests
 
-Tests live in the same file as the `run_xxx()` function they exercise, inside a
+Tests live in the same file as the subcommand's execution function (e.g.,
+`run_enable()`, `run_ingest_cmd()`, `handle_stop()`), inside a
 `#[cfg(test)] mod tests` block.
 
-### Rule 2: Call `try_run()`, not `run_xxx()`
+### Rule 2: Call `try_run()`, not the execution function directly
 
 Every integration test invokes the CLI through `crate::try_run()` with simulated
-CLI args. This tests argument parsing, command dispatch, and execution as a
-single unit.
+CLI args, rather than calling the subcommand's execution function directly. This
+tests argument parsing, command dispatch, and execution as a single unit.
 
 ```rust
 crate::try_run(&["mementor", "query", "search text"], &runtime, &mut io).unwrap();
