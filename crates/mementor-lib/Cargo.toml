@@ -1,0 +1,30 @@
+[package]
+name = "mementor-lib"
+version = "0.1.0"
+edition = "2024"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = "1.0.101"
+dirs = "6.0.0"
+fastembed = { version = "5.9.0", default-features = false, features = [
+    "ort-load-dynamic",
+    "hf-hub-native-tls",
+    "image-models",
+] }
+libsqlite3-sys = { version = "0.36.0", features = ["bundled"] }
+rusqlite = { version = "0.38.0", features = ["bundled", "blob"] }
+rusqlite_migration = "2.4.1"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+text-splitter = { version = "0.29.3", features = ["markdown", "tokenizers"] }
+tokenizers = "0.22.2"
+tracing = "0.1.44"
+
+[build-dependencies]
+cc = "1.2.56"
+
+[dev-dependencies]
+tempfile = "3.25.0"
