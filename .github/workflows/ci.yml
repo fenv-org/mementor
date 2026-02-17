@@ -39,7 +39,9 @@ jobs:
             ort-dylib-path: "/usr/local/lib/libonnxruntime.dylib"
             extra-rustup: "rustup target add x86_64-apple-darwin"
             setup-ort: |
-              arch -x86_64 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+              if [ ! -f /usr/local/bin/brew ]; then
+                arch -x86_64 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+              fi
               arch -x86_64 /usr/local/bin/brew install onnxruntime
             check-fmt: "true"
 
@@ -51,6 +53,25 @@ jobs:
       - uses: ./.github/actions/setup-mise-macos
         with:
           cache-key-prefix: ${{ matrix.cache-key-prefix }}
+
+      - name: Cache cargo
+        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ matrix.cache-key-prefix }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ matrix.cache-key-prefix }}-cargo-
+
+      - name: Cache x86_64 ONNX Runtime
+        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
+        with:
+          path: |
+            /usr/local/Homebrew
+            /usr/local/Cellar/onnxruntime
+          key: ${{ matrix.cache-key-prefix }}-ort-homebrew
+          restore-keys: ${{ matrix.cache-key-prefix }}-ort-homebrew
 
       - name: Install Rust components
         run: |

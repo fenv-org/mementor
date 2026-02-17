@@ -9,16 +9,12 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Cache mise and cargo
+    - name: Cache mise
       uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
       with:
-        path: |
-          ~/.local/share/mise
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${{ inputs.cache-key-prefix }}-mise-cargo-${{ hashFiles('mise.toml', '**/Cargo.lock') }}
-        restore-keys: ${{ inputs.cache-key-prefix }}-mise-cargo-
+        path: ~/.local/share/mise
+        key: ${{ inputs.cache-key-prefix }}-mise-${{ hashFiles('mise.toml') }}
+        restore-keys: ${{ inputs.cache-key-prefix }}-mise-
 
     - name: Install mise
       shell: bash
