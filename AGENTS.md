@@ -102,14 +102,17 @@ prebuilt static binaries for `x86_64-apple-darwin`. Microsoft dropped x86_64
 macOS binaries starting with ONNX Runtime 1.24.1 (only `aarch64-apple-darwin`
 is supported).
 
-**Workaround**: fastembed is configured with `ort-load-dynamic` feature instead
-of `ort-download-binaries`. This loads `libonnxruntime` at runtime via dynamic
-linking.
+**Platform-specific handling**: The fastembed dependency uses target-specific
+features in `crates/mementor-lib/Cargo.toml`:
 
-**Setup** (required on Intel Macs):
+- **Apple Silicon** (aarch64): `ort-download-binaries` — statically links a
+  prebuilt ONNX Runtime binary. No runtime dependency needed.
+- **Intel Mac** (x86_64): `ort-load-dynamic` — loads `libonnxruntime.dylib` at
+  runtime via `dlopen`. Requires Homebrew installation.
+
+**Setup** (required on Intel Macs only):
 
 ```bash
-# Install ONNX Runtime via Homebrew
 brew install onnxruntime
 ```
 
@@ -123,23 +126,8 @@ exist, create it:
 ORT_DYLIB_PATH = "/usr/local/lib/libonnxruntime.dylib"
 ```
 
-On **Apple Silicon** (aarch64), prebuilt binaries exist. A future milestone
-will switch to `ort-download-binaries` for aarch64 targets while keeping
-`ort-load-dynamic` for x86_64, or build ONNX Runtime from source for full
-static linking on both architectures.
-
-The fastembed dependency in `crates/mementor-lib/Cargo.toml` is configured as:
-
-```toml
-fastembed = { version = "5.9.0", default-features = false, features = [
-    "ort-load-dynamic",
-    "hf-hub-native-tls",
-    "image-models",
-] }
-```
-
-**Do NOT** change this back to default features — the default
-`ort-download-binaries` will fail the build on x86_64 macOS.
+**Do NOT** add `ort-download-binaries` to the x86_64 target — prebuilt
+binaries do not exist for `x86_64-apple-darwin` and the build will fail.
 
 ## sqlite-vector Integration
 
