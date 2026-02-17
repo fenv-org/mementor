@@ -151,6 +151,7 @@ mod tests {
     use mementor_lib::output::BufferedIO;
 
     use crate::test_util::runtime_in_memory;
+    use crate::test_util::trim_margin;
 
     #[test]
     fn try_run_enable_creates_db_and_configures_project() {
@@ -163,14 +164,16 @@ mod tests {
         assert_eq!(io.stdout_to_string(), "mementor enabled successfully.\n");
 
         // stderr (db_path is dynamic, construct expected string)
-        let expected_stderr = format!(
-            "Initializing database...\n\
-             \x20\x20Database created at {}\n\
-             Verifying embedding model...\n\
-             \x20\x20Embedding model OK\n\
-             \x20\x20.gitignore updated\n\
-             \x20\x20Claude Code hooks configured\n",
-            runtime.context.db_path().display(),
+        let db_path = runtime.context.db_path();
+        let db_path = db_path.display();
+        let expected_stderr = trim_margin!(
+            "|Initializing database...
+             |  Database created at {db_path}
+             |Verifying embedding model...
+             |  Embedding model OK
+             |  .gitignore updated
+             |  Claude Code hooks configured
+             |"
         );
         assert_eq!(io.stderr_to_string(), expected_stderr);
 

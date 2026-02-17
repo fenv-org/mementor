@@ -52,6 +52,30 @@ let expected = format!("  Database created at {}\n", runtime.context.db_path().d
 assert_eq!(io.stderr_to_string(), expected);
 ```
 
+When the expected output has leading spaces, use the `trim_margin!` macro
+(Kotlin-style margin stripping). Rust's `\` line continuation strips leading
+whitespace from the next line, making indented multi-line strings error-prone.
+`trim_margin!` solves this by using `|` as a margin marker:
+
+```rust
+use crate::trim_margin;
+
+let db_path = runtime.context.db_path().display();
+let expected = trim_margin!(
+    "|Initializing database...
+     |  Database created at {db_path}
+     |  Embedding model OK
+     |"
+);
+```
+
+Each line's leading whitespace up to and including `|` is stripped. Content
+after `|` is preserved exactly — including leading spaces for indentation.
+Lines without a `|` marker are dropped. Use `\|` for a literal pipe character
+in the output.
+
+The macro supports `format!`-style interpolation (`{var}`, `{expr}`).
+
 ## Test Helpers (`crates/mementor-cli/src/test_util.rs`)
 
 | Helper | Purpose |
@@ -61,6 +85,7 @@ assert_eq!(io.stderr_to_string(), expected);
 | `seed_memory(driver, embedder, session_id, line_index, chunk_index, content)` | Insert a session and memory row with real embeddings. |
 | `make_entry(role, text)` | Build a JSONL transcript line for a given role and text. |
 | `write_transcript(dir, lines)` | Write JSONL lines to `transcript.jsonl` in the given directory. |
+| `trim_margin!(fmt, args...)` | Macro. Strip `\|` margin markers from a multi-line string with `format!`-style interpolation. |
 
 ### Important: Hold `TempDir`
 
