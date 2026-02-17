@@ -8,8 +8,15 @@ fn main() {
     let vendor_libs = manifest_dir.join("../../vendor/sqlite-vector/libs");
 
     // Get the SQLite header directory from rusqlite's bundled build.
-    let sqlite_include = env::var("DEP_SQLITE3_INCLUDE")
-        .expect("DEP_SQLITE3_INCLUDE not set — rusqlite bundled feature required");
+    // DEP_SQLITE3_INCLUDE is set by libsqlite3-sys via cargo:include=.
+    // Fallback: search the cargo registry for the bundled sqlite3 header.
+    let sqlite_include = env::var("DEP_SQLITE3_INCLUDE").unwrap_or_else(|_| {
+        let cargo_home = env::var("CARGO_HOME")
+            .unwrap_or_else(|_| format!("{}/.cargo", env::var("HOME").unwrap()));
+        let registry_src = PathBuf::from(&cargo_home).join("registry/src");
+        find_sqlite3_include(&registry_src)
+            .expect("Could not find sqlite3.h — ensure libsqlite3-sys with bundled feature is a dependency")
+    });
 
     let target_arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap();
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap();
@@ -75,4 +82,29 @@ fn main() {
 
     println!("cargo::rerun-if-changed=../../vendor/sqlite-vector/src");
     println!("cargo::rerun-if-changed=../../vendor/sqlite-vector/libs/fp16");
+}
+
+/// Search the cargo registry for the libsqlite3-sys bundled sqlite3 header directory.
+fn find_sqlite3_include(registry_src: &std::path::Path) -> Option<String> {
+    if !registry_src.is_dir() {
+        return None;
+    }
+    // registry/src/<index-hash>/libsqlite3-sys-<version>/sqlite3/sqlite3.h
+    for index_entry in std::fs::read_dir(registry_src).ok()? {
+        let index_dir = index_entry.ok()?.path();
+        for crate_entry in std::fs::read_dir(&index_dir).ok()?.flatten() {
+            let crate_dir = crate_entry.path();
+            if crate_dir
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("libsqlite3-sys-"))
+            {
+                let sqlite3_dir = crate_dir.join("sqlite3");
+                if sqlite3_dir.join("sqlite3.h").exists() {
+                    return Some(sqlite3_dir.to_string_lossy().into_owned());
+                }
+            }
+        }
+    }
+    None
 }
