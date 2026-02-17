@@ -224,6 +224,12 @@ cargo add -p mementor-lib anyhow
 cargo add -p mementor-lib --build cc
 ```
 
+### Git Commits
+
+**Always use the `/commit` skill when creating git commits.** Do not run
+`git commit` directly. The `/commit` skill enforces the project's commit
+conventions and must be used for every commit without exception.
+
 ### Language Rule
 
 **All documents, code comments, commit messages, and user-facing strings must
