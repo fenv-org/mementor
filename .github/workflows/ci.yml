@@ -58,8 +58,15 @@ jobs:
           rustup component add clippy rustfmt
           rustup target add x86_64-apple-darwin
 
+      - name: Install x86_64 ONNX Runtime via Homebrew
+        run: |
+          arch -x86_64 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+          arch -x86_64 /usr/local/bin/brew install onnxruntime
+
       - name: Clippy (x86_64)
         run: cargo clippy --target x86_64-apple-darwin -- -D warnings
 
       - name: Test (x86_64 via Rosetta 2)
+        env:
+          ORT_DYLIB_PATH: /usr/local/lib/libonnxruntime.dylib
         run: cargo test --target x86_64-apple-darwin
