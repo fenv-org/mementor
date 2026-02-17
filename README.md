@@ -100,20 +100,20 @@ outputs the context for injection into the conversation.
 ```mermaid
 flowchart TD
     A["Session End — Stop Hook"] --> B["Transcript JSONL (stdin)"]
-    B --> C["Turn Grouping\nUser[n] + Assistant[n] + User[n+1]"]
-    C --> D["Text Splitting\nMarkdownSplitter + ~40 token overlap"]
-    D --> E["Embedding\nBGE-small-en-v1.5 · 384-dim"]
-    E --> F[("SQLite\nvector_as_f32 → BLOB")]
+    B --> C["Turn Grouping<br/>User[n] + Assistant[n] + User[n+1]"]
+    C --> D["Text Splitting<br/>MarkdownSplitter + ~40 token overlap"]
+    D --> E["Embedding<br/>BGE-small-en-v1.5 · 384-dim"]
+    E --> F[("SQLite<br/>vector_as_f32 → BLOB")]
 ```
 
 ### Recall (UserPromptSubmit Hook)
 
 ```mermaid
 flowchart TD
-    A["New Prompt — UserPromptSubmit Hook"] --> B["Query Embedding\nBGE-small-en-v1.5 · 384-dim"]
-    B --> C[("SQLite\nvector_full_scan · cosine")]
+    A["New Prompt — UserPromptSubmit Hook"] --> B["Query Embedding<br/>BGE-small-en-v1.5 · 384-dim"]
+    B --> C[("SQLite<br/>vector_full_scan · cosine")]
     C --> D["Top-k Context Retrieval"]
-    D --> E["Context Injection\ninto Claude Code"]
+    D --> E["Context Injection<br/>into Claude Code"]
 ```
 
 ### Workspace Structure
