@@ -6,10 +6,6 @@ on:
   pull_request:
     branches: [main]
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 env:
   CARGO_TERM_COLOR: always
   MISE_DATA_DIR: ~/.local/share/mise
@@ -29,6 +25,9 @@ jobs:
 
     runs-on: ${{ matrix.os }}
     name: macOS (${{ matrix.arch }})
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-${{ matrix.arch }}
+      cancel-in-progress: true
     env:
       ORT_DYLIB_PATH: ${{ matrix.ort_dylib_path }}
 
@@ -67,11 +66,11 @@ jobs:
       - name: Check formatting
         run: cargo fmt --check
 
-      - name: Clippy
-        run: cargo clippy -- -D warnings
-
       - name: Build
         run: cargo build
+
+      - name: Clippy
+        run: cargo clippy -- -D warnings
 
       - name: Test
         run: cargo test
