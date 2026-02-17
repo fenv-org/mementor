@@ -11,9 +11,30 @@ fn main() {
     // DEP_SQLITE3_INCLUDE is set by libsqlite3-sys via cargo:include=.
     // Fallback: search the cargo registry for the bundled sqlite3 header.
     let sqlite_include = env::var("DEP_SQLITE3_INCLUDE").unwrap_or_else(|_| {
+        eprintln!("DEP_SQLITE3_INCLUDE not set, searching cargo registry...");
+
+        // Print all DEP_ vars for debugging
+        for (key, value) in env::vars() {
+            if key.starts_with("DEP_") {
+                eprintln!("  {key} = {value}");
+            }
+        }
+
         let cargo_home = env::var("CARGO_HOME")
             .unwrap_or_else(|_| format!("{}/.cargo", env::var("HOME").unwrap()));
+        eprintln!("CARGO_HOME resolved to: {cargo_home}");
+
         let registry_src = PathBuf::from(&cargo_home).join("registry/src");
+        eprintln!("registry/src exists: {}", registry_src.is_dir());
+
+        if registry_src.is_dir() {
+            if let Ok(entries) = std::fs::read_dir(&registry_src) {
+                for entry in entries.flatten() {
+                    eprintln!("  index dir: {}", entry.path().display());
+                }
+            }
+        }
+
         find_sqlite3_include(&registry_src).expect(
             "Could not find sqlite3.h — ensure libsqlite3-sys with bundled feature is a dependency",
         )
