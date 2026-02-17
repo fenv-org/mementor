@@ -23,7 +23,6 @@ fastembed = { version = "5.9.0", default-features = false, features = [
 fastembed = { version = "5.9.0", default-features = false, features = [
     "ort-load-dynamic",
 ] }
-libsqlite3-sys = { version = "0.36.0", features = ["bundled"] }
 rusqlite = { version = "0.38.0", features = ["bundled", "blob"] }
 rusqlite_migration = "2.4.1"
 serde = { version = "1.0.228", features = ["derive"] }
