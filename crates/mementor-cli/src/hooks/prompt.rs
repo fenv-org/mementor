@@ -1,23 +1,24 @@
-use std::io::Write;
+use std::io::{Read, Write};
 
 use mementor_lib::config::DEFAULT_TOP_K;
 use mementor_lib::context::MementorContext;
 use mementor_lib::db::connection::open_db;
 use mementor_lib::embedding::embedder::Embedder;
-use mementor_lib::output::ConsoleOutput;
+use mementor_lib::output::ConsoleIO;
 use mementor_lib::pipeline::ingest::search_context;
 
 use super::input::PromptHookInput;
 
 /// Handle the `UserPromptSubmit` hook: embed prompt, search memories,
 /// output RAG context to stdout.
-pub fn handle_prompt<C, OUT, ERR>(
+pub fn handle_prompt<C, IN, OUT, ERR>(
     input: &PromptHookInput,
     context: &C,
-    output: &mut dyn ConsoleOutput<OUT, ERR>,
+    io: &mut dyn ConsoleIO<IN, OUT, ERR>,
 ) -> anyhow::Result<()>
 where
     C: MementorContext,
+    IN: Read,
     OUT: Write,
     ERR: Write,
 {
@@ -33,7 +34,7 @@ where
     let rag_context = search_context(&conn, &mut embedder, &input.prompt, DEFAULT_TOP_K)?;
 
     if !rag_context.is_empty() {
-        write!(output.stdout(), "{rag_context}")?;
+        write!(io.stdout(), "{rag_context}")?;
     }
 
     Ok(())

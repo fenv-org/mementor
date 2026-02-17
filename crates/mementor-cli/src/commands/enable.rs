@@ -1,9 +1,9 @@
-use std::io::Write;
+use std::io::{Read, Write};
 
 use mementor_lib::context::MementorContext;
 use mementor_lib::db::connection::open_db;
 use mementor_lib::embedding::embedder::Embedder;
-use mementor_lib::output::ConsoleOutput;
+use mementor_lib::output::ConsoleIO;
 
 /// Run the `mementor enable` command.
 ///
@@ -11,40 +11,37 @@ use mementor_lib::output::ConsoleOutput;
 /// 2. Verify bundled embedding model loads.
 /// 3. Append `.mementor/` to `.gitignore` if not present.
 /// 4. Add mementor hooks to `.claude/settings.json`.
-pub fn run_enable<C, OUT, ERR>(
+pub fn run_enable<C, IN, OUT, ERR>(
     context: &C,
-    output: &mut dyn ConsoleOutput<OUT, ERR>,
+    io: &mut dyn ConsoleIO<IN, OUT, ERR>,
 ) -> anyhow::Result<()>
 where
     C: MementorContext,
+    IN: Read,
     OUT: Write,
     ERR: Write,
 {
     let db_path = context.db_path();
 
     // Step 1: Create DB (open_db creates parent dirs + schema + vector_init)
-    writeln!(output.stderr(), "Initializing database...")?;
+    writeln!(io.stderr(), "Initializing database...")?;
     let _conn = open_db(&db_path)?;
-    writeln!(
-        output.stderr(),
-        "  Database created at {}",
-        db_path.display()
-    )?;
+    writeln!(io.stderr(), "  Database created at {}", db_path.display())?;
 
     // Step 2: Verify embedding model loads
-    writeln!(output.stderr(), "Verifying embedding model...")?;
+    writeln!(io.stderr(), "Verifying embedding model...")?;
     let _embedder = Embedder::new()?;
-    writeln!(output.stderr(), "  Embedding model OK")?;
+    writeln!(io.stderr(), "  Embedding model OK")?;
 
     // Step 3: Update .gitignore
     update_gitignore(context)?;
-    writeln!(output.stderr(), "  .gitignore updated")?;
+    writeln!(io.stderr(), "  .gitignore updated")?;
 
     // Step 4: Configure Claude Code hooks
     configure_hooks(context)?;
-    writeln!(output.stderr(), "  Claude Code hooks configured")?;
+    writeln!(io.stderr(), "  Claude Code hooks configured")?;
 
-    writeln!(output.stdout(), "mementor enabled successfully.")?;
+    writeln!(io.stdout(), "mementor enabled successfully.")?;
     Ok(())
 }
 
@@ -155,15 +152,15 @@ fn merge_hook_array(
 mod tests {
     use super::*;
     use mementor_lib::context::RealMementorContext;
-    use mementor_lib::output::BufferedOutput;
+    use mementor_lib::output::BufferedIO;
 
     #[test]
     fn enable_creates_db_and_gitignore() {
         let tmp = tempfile::tempdir().unwrap();
         let context = RealMementorContext::new(tmp.path().to_path_buf());
-        let mut output = BufferedOutput::new();
+        let mut io = BufferedIO::new();
 
-        run_enable(&context, &mut output).unwrap();
+        run_enable(&context, &mut io).unwrap();
 
         assert!(context.db_path().exists());
         assert!(context.gitignore_path().exists());
@@ -175,9 +172,9 @@ mod tests {
     fn enable_creates_hooks_config() {
         let tmp = tempfile::tempdir().unwrap();
         let context = RealMementorContext::new(tmp.path().to_path_buf());
-        let mut output = BufferedOutput::new();
+        let mut io = BufferedIO::new();
 
-        run_enable(&context, &mut output).unwrap();
+        run_enable(&context, &mut io).unwrap();
 
         let settings_path = context.claude_settings_path();
         assert!(settings_path.exists());
@@ -191,10 +188,10 @@ mod tests {
     fn enable_is_idempotent() {
         let tmp = tempfile::tempdir().unwrap();
         let context = RealMementorContext::new(tmp.path().to_path_buf());
-        let mut output = BufferedOutput::new();
+        let mut io = BufferedIO::new();
 
-        run_enable(&context, &mut output).unwrap();
-        run_enable(&context, &mut output).unwrap();
+        run_enable(&context, &mut io).unwrap();
+        run_enable(&context, &mut io).unwrap();
 
         let gitignore = std::fs::read_to_string(context.gitignore_path()).unwrap();
         // Should only contain one .mementor/ entry
@@ -217,7 +214,7 @@ mod tests {
     fn enable_preserves_existing_settings() {
         let tmp = tempfile::tempdir().unwrap();
         let context = RealMementorContext::new(tmp.path().to_path_buf());
-        let mut output = BufferedOutput::new();
+        let mut io = BufferedIO::new();
 
         // Create existing settings with custom key
         let claude_dir = context
@@ -232,7 +229,7 @@ mod tests {
         )
         .unwrap();
 
-        run_enable(&context, &mut output).unwrap();
+        run_enable(&context, &mut io).unwrap();
 
         let content = std::fs::read_to_string(context.claude_settings_path()).unwrap();
         let settings: serde_json::Value = serde_json::from_str(&content).unwrap();
