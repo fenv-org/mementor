@@ -17,7 +17,18 @@ env:
 jobs:
   build-and-test:
     runs-on: macos-latest
-    name: macOS (aarch64)
+    name: macOS (${{ matrix.arch }})
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: aarch64
+            target-flag: ""
+            cache-key-prefix: macos-aarch64
+          - arch: x86_64
+            target-flag: "--target x86_64-apple-darwin"
+            cache-key-prefix: macos-x86_64
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -26,47 +37,29 @@ jobs:
 
       - uses: ./.github/actions/setup-mise-macos
         with:
-          cache-key-prefix: macos-aarch64
+          cache-key-prefix: ${{ matrix.cache-key-prefix }}
 
       - name: Install Rust components
         run: rustup component add clippy rustfmt
 
-      - name: Check formatting
-        run: cargo fmt --check
-
-      - name: Clippy
-        run: cargo clippy -- -D warnings
-
-      - name: Test
-        run: cargo test
-
-  cross-compile-x86_64:
-    runs-on: macos-latest
-    name: macOS (x86_64 cross-compile)
-
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          lfs: true
-
-      - uses: ./.github/actions/setup-mise-macos
-        with:
-          cache-key-prefix: macos-x86_64
-
-      - name: Install Rust components
-        run: |
-          rustup component add clippy rustfmt
-          rustup target add x86_64-apple-darwin
+      - name: Add cross-compile target
+        if: matrix.arch == 'x86_64'
+        run: rustup target add x86_64-apple-darwin
 
       - name: Install x86_64 ONNX Runtime via Homebrew
+        if: matrix.arch == 'x86_64'
         run: |
           arch -x86_64 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
           arch -x86_64 /usr/local/bin/brew install onnxruntime
 
-      - name: Clippy (x86_64)
-        run: cargo clippy --target x86_64-apple-darwin -- -D warnings
+      - name: Check formatting
+        if: matrix.arch == 'aarch64'
+        run: cargo fmt --check
 
-      - name: Test (x86_64 via Rosetta 2)
+      - name: Clippy
+        run: cargo clippy ${{ matrix.target-flag }} -- -D warnings
+
+      - name: Test
         env:
-          ORT_DYLIB_PATH: /usr/local/lib/libonnxruntime.dylib
-        run: cargo test --target x86_64-apple-darwin
+          ORT_DYLIB_PATH: ${{ matrix.arch == 'x86_64' && '/usr/local/lib/libonnxruntime.dylib' || '' }}
+        run: cargo test ${{ matrix.target-flag }}
