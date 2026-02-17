@@ -23,9 +23,10 @@ pub fn open_db(path: &Path) -> anyhow::Result<Connection> {
             .with_context(|| format!("Failed to create directory: {}", parent.display()))?;
     }
 
-    let conn = Connection::open(path)
+    let mut conn = Connection::open(path)
         .with_context(|| format!("Failed to open database: {}", path.display()))?;
-    init_connection(conn)
+    init_connection(&mut conn)?;
+    Ok(conn)
 }
 
 /// Open an in-memory `SQLite` connection with sqlite-vector loaded and schema applied.
@@ -41,17 +42,18 @@ pub fn open_db_in_memory(name: &str) -> anyhow::Result<Connection> {
         | OpenFlags::SQLITE_OPEN_SHARED_CACHE
         | OpenFlags::SQLITE_OPEN_NO_MUTEX;
 
-    let conn = Connection::open_with_flags(uri, flags)
+    let mut conn = Connection::open_with_flags(uri, flags)
         .with_context(|| format!("Failed to open in-memory database: {name}"))?;
-    init_connection(conn)
+    init_connection(&mut conn)?;
+    Ok(conn)
 }
 
 /// Load sqlite-vector extension, apply schema migrations, and register vector table.
-fn init_connection(mut conn: Connection) -> anyhow::Result<Connection> {
-    register_vector_extension(&conn)?;
-    apply_migrations(&mut conn)?;
-    register_vector_table(&conn)?;
-    Ok(conn)
+fn init_connection(conn: &mut Connection) -> anyhow::Result<()> {
+    register_vector_extension(conn)?;
+    apply_migrations(conn)?;
+    register_vector_table(conn)?;
+    Ok(())
 }
 
 /// Register the sqlite-vector extension into the connection.
