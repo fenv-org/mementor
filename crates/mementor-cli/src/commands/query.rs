@@ -24,7 +24,7 @@ where
     let conn = runtime.db.open()?;
     let mut embedder = Embedder::new()?;
 
-    let result = search_context(&conn, &mut embedder, text, k)?;
+    let result = search_context(&conn, &mut embedder, text, k, None)?;
 
     if result.is_empty() {
         writeln!(io.stdout(), "No matching memories found.")?;

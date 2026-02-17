@@ -58,6 +58,7 @@ pub fn seed_memory(
             project_dir: "/seed/project".to_string(),
             last_line_index: line_index + 1,
             provisional_turn_start: None,
+            last_compact_line_index: None,
         },
     )
     .unwrap();

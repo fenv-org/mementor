@@ -5,6 +5,7 @@ use mementor_lib::embedding::embedder::Embedder;
 use mementor_lib::output::ConsoleIO;
 use mementor_lib::pipeline::ingest::search_context;
 use mementor_lib::runtime::Runtime;
+use tracing::debug;
 
 use super::input::PromptHookInput;
 
@@ -20,6 +21,14 @@ where
     OUT: Write,
     ERR: Write,
 {
+    debug!(
+        hook = "UserPromptSubmit",
+        session_id = %input.session_id,
+        prompt_len = input.prompt.len(),
+        prompt = %input.prompt,
+        "Hook received"
+    );
+
     if !runtime.db.is_ready() {
         // Silently skip — mementor not enabled
         return Ok(());
@@ -28,7 +37,21 @@ where
     let conn = runtime.db.open()?;
     let mut embedder = Embedder::new()?;
 
-    let rag_context = search_context(&conn, &mut embedder, &input.prompt, DEFAULT_TOP_K)?;
+    let rag_context = search_context(
+        &conn,
+        &mut embedder,
+        &input.prompt,
+        DEFAULT_TOP_K,
+        Some(&input.session_id),
+    )?;
+
+    debug!(
+        hook = "UserPromptSubmit",
+        context_len = rag_context.len(),
+        has_results = !rag_context.is_empty(),
+        context = %rag_context,
+        "Search completed"
+    );
 
     if !rag_context.is_empty() {
         write!(io.stdout(), "{rag_context}")?;

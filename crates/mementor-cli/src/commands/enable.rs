@@ -94,6 +94,13 @@ fn configure_hooks(ctx: &MementorContext) -> anyhow::Result<()> {
         }]
     });
 
+    let pre_compact_hook = serde_json::json!({
+        "hooks": [{
+            "type": "command",
+            "command": "mementor hook pre-compact"
+        }]
+    });
+
     // Merge hooks into settings
     let hooks = settings
         .as_object_mut()
@@ -110,6 +117,9 @@ fn configure_hooks(ctx: &MementorContext) -> anyhow::Result<()> {
 
     // Add UserPromptSubmit hook
     merge_hook_array(hooks_obj, "UserPromptSubmit", prompt_hook);
+
+    // Add PreCompact hook
+    merge_hook_array(hooks_obj, "PreCompact", pre_compact_hook);
 
     // Write settings back
     let formatted = serde_json::to_string_pretty(&settings)?;
