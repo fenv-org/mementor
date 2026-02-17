@@ -85,20 +85,15 @@ When working in a separate `git worktree`, change into the worktree directory
 first, then run:
 
 ```bash
+cp <main-worktree>/mise.local.toml .   # x86_64 macOS only (ORT_DYLIB_PATH)
 mise trust
+mise trust mise.local.toml
 mise install
 ```
 
 This is required because mise does not auto-trust config files outside the
 original repository path. Without these steps, `cargo` and other mise-managed
 tools will not be available inside the worktree.
-
-On x86_64 macOS, also copy `mise.local.toml` (gitignored) from the main
-worktree. It contains the `ORT_DYLIB_PATH` needed for ONNX Runtime:
-
-```bash
-cp <main-worktree>/mise.local.toml .
-```
 
 ## Build
 
