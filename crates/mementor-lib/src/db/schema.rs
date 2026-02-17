@@ -3,32 +3,37 @@ use rusqlite_migration::{M, Migrations};
 
 /// Define all schema migrations.
 fn migrations() -> Migrations<'static> {
-    Migrations::new(vec![M::up(
-        "CREATE TABLE sessions (
-            session_id                TEXT PRIMARY KEY,
-            transcript_path           TEXT NOT NULL,
-            project_dir               TEXT NOT NULL,
-            last_line_index           INTEGER NOT NULL DEFAULT 0,
-            provisional_turn_start    INTEGER,
-            created_at                TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at                TEXT NOT NULL DEFAULT (datetime('now'))
-        );
+    Migrations::new(vec![
+        // v1: Initial schema
+        M::up(
+            "CREATE TABLE sessions (
+                session_id                TEXT PRIMARY KEY,
+                transcript_path           TEXT NOT NULL,
+                project_dir               TEXT NOT NULL,
+                last_line_index           INTEGER NOT NULL DEFAULT 0,
+                provisional_turn_start    INTEGER,
+                created_at                TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at                TEXT NOT NULL DEFAULT (datetime('now'))
+            );
 
-        CREATE TABLE memories (
-            id               INTEGER PRIMARY KEY AUTOINCREMENT,
-            session_id       TEXT NOT NULL REFERENCES sessions(session_id),
-            line_index       INTEGER NOT NULL,
-            chunk_index      INTEGER NOT NULL,
-            role             TEXT NOT NULL,
-            content          TEXT NOT NULL,
-            embedding        BLOB,
-            created_at       TEXT NOT NULL DEFAULT (datetime('now')),
-            UNIQUE(session_id, line_index, chunk_index)
-        );
+            CREATE TABLE memories (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id       TEXT NOT NULL REFERENCES sessions(session_id),
+                line_index       INTEGER NOT NULL,
+                chunk_index      INTEGER NOT NULL,
+                role             TEXT NOT NULL,
+                content          TEXT NOT NULL,
+                embedding        BLOB,
+                created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+                UNIQUE(session_id, line_index, chunk_index)
+            );
 
-        CREATE INDEX idx_memories_session
-            ON memories(session_id, line_index);",
-    )])
+            CREATE INDEX idx_memories_session
+                ON memories(session_id, line_index);",
+        ),
+        // v2: Add compaction boundary tracking
+        M::up("ALTER TABLE sessions ADD COLUMN last_compact_line_index INTEGER;"),
+    ])
 }
 
 /// Apply all pending migrations to the database.
@@ -79,5 +84,146 @@ mod tests {
         let mut conn = Connection::open_in_memory().unwrap();
         apply_migrations(&mut conn).unwrap();
         apply_migrations(&mut conn).unwrap(); // Should not fail
+    }
+
+    #[test]
+    fn v1_to_v2_migration_preserves_data() {
+        let mut conn = Connection::open_in_memory().unwrap();
+
+        // Apply only v1 migration
+        let v1 = Migrations::new(vec![M::up(
+            "CREATE TABLE sessions (
+                session_id                TEXT PRIMARY KEY,
+                transcript_path           TEXT NOT NULL,
+                project_dir               TEXT NOT NULL,
+                last_line_index           INTEGER NOT NULL DEFAULT 0,
+                provisional_turn_start    INTEGER,
+                created_at                TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at                TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE TABLE memories (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id       TEXT NOT NULL REFERENCES sessions(session_id),
+                line_index       INTEGER NOT NULL,
+                chunk_index      INTEGER NOT NULL,
+                role             TEXT NOT NULL,
+                content          TEXT NOT NULL,
+                embedding        BLOB,
+                created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+                UNIQUE(session_id, line_index, chunk_index)
+            );
+            CREATE INDEX idx_memories_session
+                ON memories(session_id, line_index);",
+        )]);
+        v1.to_latest(&mut conn).unwrap();
+
+        // Insert v1 data
+        conn.execute(
+            "INSERT INTO sessions (session_id, transcript_path, project_dir, last_line_index)
+             VALUES ('s1', '/tmp/t.jsonl', '/tmp/p', 10)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO memories (session_id, line_index, chunk_index, role, content)
+             VALUES ('s1', 0, 0, 'turn', 'hello world')",
+            [],
+        )
+        .unwrap();
+
+        // Apply all migrations (v1 already done, so only v2 runs)
+        apply_migrations(&mut conn).unwrap();
+
+        // Verify existing data is preserved
+        let (sid, idx): (String, i64) = conn
+            .query_row(
+                "SELECT session_id, last_line_index FROM sessions WHERE session_id = 's1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(sid, "s1");
+        assert_eq!(idx, 10);
+
+        // Verify new column exists and defaults to NULL
+        let compact_idx: Option<i64> = conn
+            .query_row(
+                "SELECT last_compact_line_index FROM sessions WHERE session_id = 's1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(compact_idx.is_none());
+
+        // Verify memories data is preserved
+        let mem_content: String = conn
+            .query_row(
+                "SELECT content FROM memories WHERE session_id = 's1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(mem_content, "hello world");
+
+        // Verify new column is queryable/updatable
+        conn.execute(
+            "UPDATE sessions SET last_compact_line_index = 5 WHERE session_id = 's1'",
+            [],
+        )
+        .unwrap();
+        let updated: i64 = conn
+            .query_row(
+                "SELECT last_compact_line_index FROM sessions WHERE session_id = 's1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(updated, 5);
+    }
+
+    #[test]
+    fn zero_to_v2_fresh_install() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        apply_migrations(&mut conn).unwrap();
+
+        // Verify both tables exist
+        let table_count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('sessions', 'memories')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(table_count, 2);
+
+        // Verify last_compact_line_index column exists by inserting and querying
+        conn.execute(
+            "INSERT INTO sessions (session_id, transcript_path, project_dir, last_line_index, last_compact_line_index)
+             VALUES ('s1', '/tmp/t.jsonl', '/tmp/p', 20, 10)",
+            [],
+        )
+        .unwrap();
+
+        let (line_idx, compact_idx): (i64, Option<i64>) = conn
+            .query_row(
+                "SELECT last_line_index, last_compact_line_index FROM sessions WHERE session_id = 's1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(line_idx, 20);
+        assert_eq!(compact_idx, Some(10));
+
+        // Verify memories can be inserted and queried
+        conn.execute(
+            "INSERT INTO memories (session_id, line_index, chunk_index, role, content)
+             VALUES ('s1', 0, 0, 'turn', 'test content')",
+            [],
+        )
+        .unwrap();
+        let count: i64 = conn
+            .query_row("SELECT count(*) FROM memories", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
     }
 }

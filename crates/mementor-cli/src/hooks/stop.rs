@@ -6,6 +6,7 @@ use mementor_lib::output::ConsoleIO;
 use mementor_lib::pipeline::chunker::load_tokenizer;
 use mementor_lib::pipeline::ingest::run_ingest;
 use mementor_lib::runtime::Runtime;
+use tracing::debug;
 
 use super::input::StopHookInput;
 
@@ -20,6 +21,14 @@ where
     OUT: Write,
     ERR: Write,
 {
+    debug!(
+        hook = "Stop",
+        session_id = %input.session_id,
+        transcript_path = %input.transcript_path,
+        cwd = %input.cwd,
+        "Hook received"
+    );
+
     if !runtime.db.is_ready() {
         writeln!(
             io.stderr(),

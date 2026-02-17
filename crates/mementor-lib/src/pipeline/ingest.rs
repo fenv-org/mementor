@@ -26,6 +26,7 @@ use crate::transcript::parser::parse_transcript;
 /// 3. Process all complete turns (chunk -> embed -> store).
 /// 4. Store the last turn as provisional.
 /// 5. Update session state.
+#[allow(clippy::too_many_lines)]
 pub fn run_ingest(
     conn: &Connection,
     embedder: &mut Embedder,
@@ -36,15 +37,30 @@ pub fn run_ingest(
 ) -> anyhow::Result<()> {
     // Load or create session
     let session = queries::get_session(conn, session_id)?;
-    let (start_line, provisional_start) = match &session {
-        Some(s) => (s.last_line_index, s.provisional_turn_start),
-        None => (0, None),
+    let (start_line, provisional_start) = if let Some(s) = &session {
+        debug!(
+            session_id = %session_id,
+            last_line_index = s.last_line_index,
+            provisional_turn_start = ?s.provisional_turn_start,
+            last_compact_line_index = ?s.last_compact_line_index,
+            "Loaded existing session"
+        );
+        (s.last_line_index, s.provisional_turn_start)
+    } else {
+        debug!(session_id = %session_id, "Creating new session");
+        (0, None)
     };
 
     // Parse new messages from the transcript starting at start_line.
     // If there's a provisional turn, re-read from its start to re-process it.
     let read_from = provisional_start.unwrap_or(start_line);
     let messages = parse_transcript(transcript_path, read_from)?;
+    debug!(
+        session_id = %session_id,
+        read_from = read_from,
+        message_count = messages.len(),
+        "Parsed transcript messages"
+    );
     if messages.is_empty() {
         debug!("No new messages found in transcript");
         return Ok(());
@@ -52,6 +68,21 @@ pub fn run_ingest(
 
     // Group messages into turns
     let turns = group_into_turns(&messages);
+    debug!(
+        session_id = %session_id,
+        turn_count = turns.len(),
+        "Grouped messages into turns"
+    );
+    for (i, turn) in turns.iter().enumerate() {
+        debug!(
+            turn_index = i,
+            line_index = turn.line_index,
+            provisional = turn.provisional,
+            text_len = turn.text.len(),
+            text = %turn.text,
+            "Turn detail"
+        );
+    }
     if turns.is_empty() {
         debug!("No turns formed from messages");
         return Ok(());
@@ -67,6 +98,7 @@ pub fn run_ingest(
                 project_dir: project_dir.to_string(),
                 last_line_index: read_from,
                 provisional_turn_start: None,
+                last_compact_line_index: None,
             },
         )?;
     }
@@ -83,6 +115,13 @@ pub fn run_ingest(
 
     for turn in &turns {
         let chunks = chunk_turn(turn, tokenizer);
+        debug!(
+            session_id = %session_id,
+            line_index = turn.line_index,
+            chunk_count = chunks.len(),
+            provisional = turn.provisional,
+            "Chunked turn"
+        );
         if chunks.is_empty() {
             continue;
         }
@@ -134,6 +173,7 @@ pub fn run_ingest(
             project_dir: project_dir.to_string(),
             last_line_index,
             provisional_turn_start: new_provisional_start,
+            last_compact_line_index: session.and_then(|s| s.last_compact_line_index),
         },
     )?;
 
@@ -149,25 +189,64 @@ pub fn run_ingest(
 
 /// Search memories across all sessions for the given query text.
 /// Returns formatted context string suitable for injecting into a prompt.
+///
+/// When `session_id` is provided, results are tagged with their relationship
+/// to the current session and compaction boundary.
 pub fn search_context(
     conn: &Connection,
     embedder: &mut Embedder,
     query: &str,
     k: usize,
+    session_id: Option<&str>,
 ) -> anyhow::Result<String> {
+    debug!(
+        query_len = query.len(),
+        query = %query,
+        k = k,
+        session_id = ?session_id,
+        "Searching memories"
+    );
+
     let embeddings = embedder.embed_batch(&[query])?;
     let query_embedding = &embeddings[0];
 
     let results = search_memories(conn, query_embedding, k)?;
 
     if results.is_empty() {
+        debug!("No search results found");
         return Ok(String::new());
     }
 
-    let mut context = String::from("## Relevant past context\n\n");
+    // Look up compaction boundary for the current session
+    let compact_boundary = session_id
+        .map(|sid| queries::get_session(conn, sid))
+        .transpose()?
+        .flatten()
+        .and_then(|s| s.last_compact_line_index);
+
+    let mut ctx = String::from("## Relevant past context\n\n");
     for (i, result) in results.iter().enumerate() {
+        let tag = match session_id {
+            Some(sid) if result.session_id == sid => match compact_boundary {
+                Some(boundary) if result.line_index <= boundary => "same session, pre-compaction",
+                Some(_) => "recent (in-context)",
+                None => "same session",
+            },
+            _ => "cross-session",
+        };
+
+        debug!(
+            rank = i + 1,
+            distance = result.distance,
+            result_session_id = %result.session_id,
+            line_index = result.line_index,
+            tag = tag,
+            content = %result.content,
+            "Search result"
+        );
+
         write!(
-            &mut context,
+            &mut ctx,
             "### Memory {} (distance: {:.4})\n{}\n\n",
             i + 1,
             result.distance,
@@ -176,7 +255,7 @@ pub fn search_context(
         .unwrap();
     }
 
-    Ok(context)
+    Ok(ctx)
 }
 
 #[cfg(test)]
@@ -332,7 +411,8 @@ mod tests {
         )
         .unwrap();
 
-        let context = search_context(&conn, &mut embedder, "authentication", 5).unwrap();
+        let context =
+            search_context(&conn, &mut embedder, "authentication", 5, Some("s1")).unwrap();
         assert!(!context.is_empty());
         assert!(context.contains("Relevant past context"));
     }

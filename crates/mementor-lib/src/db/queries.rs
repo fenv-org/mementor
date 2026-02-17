@@ -6,6 +6,7 @@
 
 use anyhow::Context;
 use rusqlite::{Connection, params};
+use tracing::debug;
 
 /// Session data stored in the `sessions` table.
 #[derive(Debug)]
@@ -15,10 +16,18 @@ pub struct Session {
     pub project_dir: String,
     pub last_line_index: usize,
     pub provisional_turn_start: Option<usize>,
+    pub last_compact_line_index: Option<usize>,
 }
 
 /// Insert or update a session record.
 pub fn upsert_session(conn: &Connection, session: &Session) -> anyhow::Result<()> {
+    debug!(
+        session_id = %session.session_id,
+        last_line_index = session.last_line_index,
+        provisional_turn_start = ?session.provisional_turn_start,
+        last_compact_line_index = ?session.last_compact_line_index,
+        "Upserting session"
+    );
     conn.execute(
         "INSERT INTO sessions (session_id, transcript_path, project_dir, last_line_index, provisional_turn_start, updated_at)
          VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'))
@@ -43,7 +52,8 @@ pub fn upsert_session(conn: &Connection, session: &Session) -> anyhow::Result<()
 pub fn get_session(conn: &Connection, session_id: &str) -> anyhow::Result<Option<Session>> {
     let mut stmt = conn
         .prepare(
-            "SELECT session_id, transcript_path, project_dir, last_line_index, provisional_turn_start
+            "SELECT session_id, transcript_path, project_dir, last_line_index,
+                    provisional_turn_start, last_compact_line_index
              FROM sessions WHERE session_id = ?1",
         )
         .context("Failed to prepare get_session query")?;
@@ -56,6 +66,7 @@ pub fn get_session(conn: &Connection, session_id: &str) -> anyhow::Result<Option
                 project_dir: row.get(2)?,
                 last_line_index: row.get::<_, i64>(3)? as usize,
                 provisional_turn_start: row.get::<_, Option<i64>>(4)?.map(|v| v as usize),
+                last_compact_line_index: row.get::<_, Option<i64>>(5)?.map(|v| v as usize),
             })
         })
         .optional()
@@ -74,6 +85,14 @@ pub fn insert_memory(
     content: &str,
     embedding: &[f32],
 ) -> anyhow::Result<()> {
+    debug!(
+        session_id = %session_id,
+        line_index = line_index,
+        chunk_index = chunk_index,
+        content_len = content.len(),
+        content = %content,
+        "Inserting memory chunk"
+    );
     let embedding_json = serde_json::to_string(embedding)?;
 
     conn.execute(
@@ -149,7 +168,28 @@ pub fn search_memories(
         .collect::<Result<Vec<_>, _>>()
         .context("Failed to search memories")?;
 
+    debug!(
+        k = k,
+        result_count = results.len(),
+        "Vector search completed"
+    );
+
     Ok(results)
+}
+
+/// Update the compaction boundary for a session.
+///
+/// Sets `last_compact_line_index` to the current `last_line_index`,
+/// marking all memories up to that point as pre-compaction.
+pub fn update_compact_line(conn: &Connection, session_id: &str) -> anyhow::Result<()> {
+    conn.execute(
+        "UPDATE sessions SET last_compact_line_index = last_line_index, updated_at = datetime('now')
+         WHERE session_id = ?1",
+        params![session_id],
+    )
+    .context("Failed to update compact line")?;
+    debug!(session_id = %session_id, "Updated compaction boundary");
+    Ok(())
 }
 
 /// Trait extension for `rusqlite::OptionalExtension`.
@@ -189,6 +229,7 @@ mod tests {
             project_dir: "/tmp/project".to_string(),
             last_line_index: 0,
             provisional_turn_start: None,
+            last_compact_line_index: None,
         };
         upsert_session(&conn, &session).unwrap();
 
@@ -196,6 +237,7 @@ mod tests {
         assert_eq!(result.session_id, "test-session");
         assert_eq!(result.last_line_index, 0);
         assert!(result.provisional_turn_start.is_none());
+        assert!(result.last_compact_line_index.is_none());
     }
 
     #[test]
@@ -208,6 +250,7 @@ mod tests {
             project_dir: "/tmp/p".to_string(),
             last_line_index: 0,
             provisional_turn_start: None,
+            last_compact_line_index: None,
         };
         upsert_session(&conn, &session).unwrap();
 
@@ -240,6 +283,7 @@ mod tests {
             project_dir: "/tmp/p".to_string(),
             last_line_index: 2,
             provisional_turn_start: None,
+            last_compact_line_index: None,
         };
         upsert_session(&conn, &session).unwrap();
 
@@ -266,6 +310,7 @@ mod tests {
             project_dir: "/tmp/p".to_string(),
             last_line_index: 4,
             provisional_turn_start: None,
+            last_compact_line_index: None,
         };
         upsert_session(&conn, &session).unwrap();
 

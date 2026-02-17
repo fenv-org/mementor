@@ -44,4 +44,8 @@ pub enum HookCommand {
     /// outputs context to stdout.
     #[command(name = "user-prompt-submit")]
     UserPromptSubmit,
+    /// `PreCompact` hook handler: ingests latest conversation and records
+    /// compaction boundary before Claude Code compacts the context.
+    #[command(name = "pre-compact")]
+    PreCompact,
 }

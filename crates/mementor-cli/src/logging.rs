@@ -3,6 +3,7 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use sha2::{Digest, Sha256};
+use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -36,7 +37,12 @@ fn try_init_file_logging(log_dir: &Path, project_root: &Path) -> anyhow::Result<
         .append(true)
         .open(file_path)?;
 
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        EnvFilter::new("warn,mementor_lib=debug,mementor_cli=debug,mementor_main=debug")
+    });
+
     tracing_subscriber::registry()
+        .with(filter)
         .with(fmt::layer().json().with_writer(Mutex::new(file)))
         .init();
 

@@ -44,6 +44,10 @@ where
                 let input = hooks::input::read_prompt_input(io.stdin())?;
                 hooks::prompt::handle_prompt(&input, runtime, io)
             }
+            HookCommand::PreCompact => {
+                let input = hooks::input::read_pre_compact_input(io.stdin())?;
+                hooks::pre_compact::handle_pre_compact(&input, runtime, io)
+            }
         },
     }
 }
