@@ -1,13 +1,31 @@
+use std::path::PathBuf;
+
 use mementor_lib::context::RealMementorContext;
-use mementor_lib::output::StdOutput;
+use mementor_lib::output::StdIO;
 
 fn main() -> anyhow::Result<()> {
+    // 1. Read env + create context
+    let cwd = std::env::current_dir()?;
+    let log_dir = std::env::var("MEMENTOR_LOG_DIR").ok().map(PathBuf::from);
+    let context = RealMementorContext::with_log_dir(cwd, log_dir);
+
+    // 2. Init file logging (no-op if log_dir is None)
+    mementor_cli::logging::init_file_logging(&context);
+
+    // 3. Set panic hook (logs to file if available, always prints to stderr)
+    std::panic::set_hook(Box::new(|info| {
+        tracing::error!("{info}");
+        eprintln!("{info}");
+    }));
+
+    // 4. Run CLI
     let args: Vec<String> = std::env::args().collect();
     let args_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let mut io = StdIO::new();
 
-    let context = RealMementorContext::from_cwd()?;
-    let mut output = StdOutput::new();
-    let mut stdin = std::io::stdin();
-
-    mementor_cli::try_run(&args_refs, &context, &mut output, &mut stdin)
+    let result = mementor_cli::try_run(&args_refs, &context, &mut io);
+    if let Err(ref e) = result {
+        tracing::error!(error = format!("{e:?}"), "command failed");
+    }
+    result
 }

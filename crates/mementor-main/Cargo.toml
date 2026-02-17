@@ -10,3 +10,4 @@ workspace = true
 anyhow = "1.0.101"
 mementor-cli = { version = "0.1.0", path = "../mementor-cli" }
 mementor-lib = { version = "0.1.0", path = "../mementor-lib" }
+tracing = "0.1.44"
