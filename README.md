@@ -95,39 +95,25 @@ outputs the context for injection into the conversation.
 
 ## Architecture
 
+### Ingestion (Stop Hook)
+
+```mermaid
+flowchart TD
+    A["Session End — Stop Hook"] --> B["Transcript JSONL (stdin)"]
+    B --> C["Turn Grouping<br/>User[n] + Assistant[n] + User[n+1]"]
+    C --> D["Text Splitting<br/>MarkdownSplitter + ~40 token overlap"]
+    D --> E["Embedding<br/>BGE-small-en-v1.5 · 384-dim"]
+    E --> F[("SQLite<br/>vector_as_f32 → BLOB")]
 ```
-Session End (Stop Hook)
-  |
-  v
-Transcript JSONL (stdin)
-  |
-  v
-Turn Grouping: [User[n] + Assistant[n] + User[n+1]]
-  |
-  v
-Text Splitting (MarkdownSplitter) + Sub-chunk Overlap (~40 tokens)
-  |
-  v
-Embedding (BGE-small-en-v1.5 via fastembed-rs)
-  |
-  v
-Storage (SQLite + sqlite-vector BLOB column)
 
----
+### Recall (UserPromptSubmit Hook)
 
-New Prompt (UserPromptSubmit Hook)
-  |
-  v
-Query Embedding
-  |
-  v
-Cosine Similarity Search (vector_distance_cos)
-  |
-  v
-Top-k Context Retrieval
-  |
-  v
-Context Injection into Claude Code
+```mermaid
+flowchart TD
+    A["New Prompt — UserPromptSubmit Hook"] --> B["Query Embedding<br/>BGE-small-en-v1.5 · 384-dim"]
+    B --> C[("SQLite<br/>vector_full_scan · cosine")]
+    C --> D["Top-k Context Retrieval"]
+    D --> E["Context Injection<br/>into Claude Code"]
 ```
 
 ### Workspace Structure
@@ -145,9 +131,17 @@ models/
 
 ## License
 
-TBD
+This project is licensed under the [MIT License](LICENSE).
 
 > **Note**: This project statically links sqlite-vector, which is distributed
 > under the [Elastic License 2.0](https://www.elastic.co/licensing/elastic-license).
 > The Elastic License 2.0 permits most use cases but restricts providing the
 > software as a managed service. Review the license terms before redistribution.
+
+## Acknowledgments
+
+Inspired by [Entire CLI](https://github.com/entireio/cli), a developer platform
+that hooks into Git workflows to capture AI agent sessions on every push.
+Mementor takes a different approach — instead of recording sessions for external
+review, it vectorizes transcripts locally and recalls relevant context
+automatically, giving Claude Code persistent cross-session memory.
