@@ -14,8 +14,9 @@ fn main() {
         let cargo_home = env::var("CARGO_HOME")
             .unwrap_or_else(|_| format!("{}/.cargo", env::var("HOME").unwrap()));
         let registry_src = PathBuf::from(&cargo_home).join("registry/src");
-        find_sqlite3_include(&registry_src)
-            .expect("Could not find sqlite3.h — ensure libsqlite3-sys with bundled feature is a dependency")
+        find_sqlite3_include(&registry_src).expect(
+            "Could not find sqlite3.h — ensure libsqlite3-sys with bundled feature is a dependency",
+        )
     });
 
     let target_arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap();

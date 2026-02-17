@@ -6,64 +6,30 @@ on:
   pull_request:
     branches: [main]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
   MISE_DATA_DIR: ~/.local/share/mise
 
 jobs:
   build-and-test:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-13
-            arch: x86_64
-            ort_dylib_path: /usr/local/lib/libonnxruntime.dylib
-          - os: macos-latest
-            arch: aarch64
-            ort_dylib_path: ""
-
-    runs-on: ${{ matrix.os }}
-    name: macOS (${{ matrix.arch }})
-    concurrency:
-      group: ${{ github.workflow }}-${{ github.ref }}-${{ matrix.arch }}
-      cancel-in-progress: true
-    env:
-      ORT_DYLIB_PATH: ${{ matrix.ort_dylib_path }}
+    runs-on: macos-latest
+    name: macOS (aarch64)
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           lfs: true
 
-      - name: Cache mise and cargo
-        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
+      - uses: ./.github/actions/setup-mise-macos
         with:
-          path: |
-            ~/.local/share/mise
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ matrix.os }}-mise-cargo-${{ hashFiles('mise.toml', '**/Cargo.lock') }}
-          restore-keys: ${{ matrix.os }}-mise-cargo-
-
-      - name: Install mise
-        run: curl https://mise.run | sh
-
-      - name: Activate mise
-        run: |
-          echo 'eval "$(mise activate bash)"' >> ${RUNNER_TEMP}/mise-activate.sh
-          echo "BASH_ENV=${RUNNER_TEMP}/mise-activate.sh" >> "$GITHUB_ENV"
-
-      - name: Install tools via mise
-        run: mise trust && mise install
+          cache-key-prefix: macos-aarch64
 
       - name: Install Rust components
         run: rustup component add clippy rustfmt
-
-      - name: Install ONNX Runtime (x86_64 only)
-        if: matrix.arch == 'x86_64'
-        run: brew install onnxruntime
 
       - name: Check formatting
         run: cargo fmt --check
@@ -76,3 +42,27 @@ jobs:
 
       - name: Test
         run: cargo test
+
+  cross-compile-x86_64:
+    runs-on: macos-latest
+    name: macOS (x86_64 cross-compile)
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          lfs: true
+
+      - uses: ./.github/actions/setup-mise-macos
+        with:
+          cache-key-prefix: macos-x86_64
+
+      - name: Install Rust components
+        run: |
+          rustup component add clippy rustfmt
+          rustup target add x86_64-apple-darwin
+
+      - name: Build (x86_64)
+        run: cargo build --target x86_64-apple-darwin
+
+      - name: Clippy (x86_64)
+        run: cargo clippy --target x86_64-apple-darwin -- -D warnings
