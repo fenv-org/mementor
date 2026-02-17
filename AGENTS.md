@@ -68,7 +68,7 @@ mementor/
 
 - **mementor-lib**: All business logic. Database schema and operations,
   embedding pipeline, transcript parsing, turn grouping, text chunking, vector
-  search. Defines DI traits (`MementorContext`, `ConsoleOutput<OUT, ERR>`).
+  search. Defines DI traits (`MementorContext`, `ConsoleIO<IN, OUT, ERR>`).
   No direct CLI or I/O concerns.
 
 - **mementor-cli**: CLI command implementations using `clap`. Each command
