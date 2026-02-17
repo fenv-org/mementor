@@ -1630,7 +1630,6 @@ dependencies = [
  "cc",
  "dirs",
  "fastembed",
- "libsqlite3-sys",
  "rusqlite",
  "rusqlite_migration",
  "serde",
