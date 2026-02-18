@@ -107,6 +107,19 @@ For a release build:
 cargo build --release
 ```
 
+### ONNX Model
+
+The BGE-small-en-v1.5 ONNX model is embedded into the binary at compile time
+via `include_bytes!`. The model file must exist before building:
+
+```bash
+mise run model:download
+```
+
+This downloads `models/bge-small-en-v1.5/model.onnx` from Hugging Face Hub if
+it is not already present. If you cloned with Git LFS, the file is already
+available and the script is a no-op.
+
 ### ONNX Runtime on x86_64 macOS (Intel Mac)
 
 `ort-sys` (the ONNX Runtime binding used by `fastembed`) does **not** provide
