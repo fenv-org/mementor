@@ -328,5 +328,6 @@ mise run test:unit
 Tests should be colocated with the code they test (in `#[cfg(test)]` modules)
 for unit tests. Integration tests go in `tests/` directories within each crate.
 
-For the standard subcommand-level integration test pattern (5 rules, helpers,
-and annotated examples), see [`docs/testing-patterns.md`](docs/testing-patterns.md).
+**All subcommand-level integration tests MUST follow the 5 rules in
+[`docs/testing-patterns.md`](docs/testing-patterns.md).** Read that document
+before writing any new integration test. Non-compliant tests will be rejected.
