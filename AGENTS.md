@@ -298,6 +298,11 @@ below.** Do not omit or assume any step is implicit.
    run `git commit` directly. Always update the history document (step 4)
    before committing.
 
+6. **Complete all TODOs before creating a PR**: Every TODO item in the history
+   document must be done before opening a pull request. If any item is found
+   to be infeasible during implementation, move it to a "Future work" section
+   with an explanation -- do not leave unfinished TODOs.
+
 ## Testing
 
 Run all tests (unit + integration):
