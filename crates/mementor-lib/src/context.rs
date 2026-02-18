@@ -8,6 +8,8 @@ pub struct MementorContext {
     /// The actual working directory (may differ from `project_root` in a
     /// linked worktree or subdirectory).
     cwd: PathBuf,
+    /// `true` when `cwd` is inside a linked (non-primary) git worktree.
+    is_linked_worktree: bool,
     log_dir: Option<PathBuf>,
 }
 
@@ -21,6 +23,7 @@ impl MementorContext {
         Self {
             cwd: project_root.clone(),
             project_root,
+            is_linked_worktree: false,
             log_dir: None,
         }
     }
@@ -33,23 +36,26 @@ impl MementorContext {
         Self {
             cwd: project_root.clone(),
             project_root,
+            is_linked_worktree: false,
             log_dir,
         }
     }
 
     /// Create a new context with separate cwd and project root.
     ///
-    /// Use this when the actual working directory (e.g., a linked worktree)
-    /// differs from the resolved primary worktree root.
+    /// Use this when the actual working directory (e.g., a linked worktree or
+    /// subdirectory) differs from the resolved primary worktree root.
     #[must_use]
     pub fn with_cwd_and_log_dir(
         cwd: PathBuf,
         project_root: PathBuf,
+        is_linked_worktree: bool,
         log_dir: Option<PathBuf>,
     ) -> Self {
         Self {
             project_root,
             cwd,
+            is_linked_worktree,
             log_dir,
         }
     }
@@ -71,6 +77,16 @@ impl MementorContext {
     /// [`Self::project_root`].
     pub fn cwd(&self) -> &Path {
         &self.cwd
+    }
+
+    /// Returns `true` if the working directory is inside a linked (non-primary)
+    /// git worktree.
+    ///
+    /// Determined at startup by [`crate::git::resolve_worktree`] based on the
+    /// `.git` entry type — not by path comparison, so symlinks do not affect
+    /// the result.
+    pub fn is_linked_worktree(&self) -> bool {
+        self.is_linked_worktree
     }
 
     /// Optional parent directory for log file output.
@@ -167,14 +183,22 @@ mod tests {
         let ctx = MementorContext::with_cwd_and_log_dir(
             PathBuf::from("/tmp/worktree"),
             PathBuf::from("/tmp/project"),
+            true,
             None,
         );
         assert_eq!(ctx.cwd(), Path::new("/tmp/worktree"));
         assert_eq!(ctx.project_root(), Path::new("/tmp/project"));
+        assert!(ctx.is_linked_worktree());
         // DB path still derives from project_root, not cwd.
         assert_eq!(
             ctx.db_path(),
             PathBuf::from("/tmp/project/.mementor/mementor.db"),
         );
+    }
+
+    #[test]
+    fn is_linked_worktree_defaults_to_false() {
+        let ctx = MementorContext::new(PathBuf::from("/tmp/project"));
+        assert!(!ctx.is_linked_worktree());
     }
 }

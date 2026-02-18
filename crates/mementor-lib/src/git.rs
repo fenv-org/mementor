@@ -1,44 +1,83 @@
 use std::path::{Path, PathBuf};
 
-/// Resolve the primary (main) worktree root from any directory within a git
-/// repository.
+/// The result of resolving a working directory's git worktree status.
+///
+/// Returned by [`resolve_worktree`]. Classifies the working directory as being
+/// inside a primary worktree, a linked worktree, or not inside any git
+/// repository at all.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResolvedWorktree {
+    /// The working directory is inside a primary (non-linked) worktree.
+    /// Contains the primary worktree root (where `.git` is a directory).
+    Primary(PathBuf),
+    /// The working directory is inside a linked worktree.
+    /// Contains the resolved primary worktree root.
+    Linked(PathBuf),
+    /// The working directory is not inside any git repository.
+    NotGitRepo,
+}
+
+impl ResolvedWorktree {
+    /// Returns the primary worktree root, regardless of whether this is a
+    /// primary or linked worktree. Returns `None` if not in a git repo.
+    pub fn primary_root(&self) -> Option<&Path> {
+        match self {
+            Self::Primary(root) | Self::Linked(root) => Some(root),
+            Self::NotGitRepo => None,
+        }
+    }
+
+    /// Returns `true` if this is a linked (non-primary) worktree.
+    pub fn is_linked(&self) -> bool {
+        matches!(self, Self::Linked(_))
+    }
+}
+
+/// Classify the git worktree that contains `cwd` and resolve its primary root.
 ///
 /// Walks up from `cwd` toward the filesystem root, looking for a `.git` entry:
 ///
-/// - **Directory** (`.git/`): this is the primary worktree root. Returns it.
+/// - **Directory** (`.git/`): this is the primary worktree root.
+///   Returns [`ResolvedWorktree::Primary`].
 /// - **File** (`.git`): could be a linked worktree or a submodule.
 ///   - If `<gitdir>/commondir` exists, this is a **linked worktree**. Follow
 ///     the `commondir` chain to resolve the common `.git` directory and return
-///     its parent (the primary worktree root).
+///     [`ResolvedWorktree::Linked`] with the primary worktree root.
 ///   - If `commondir` is absent, this is a **submodule**. Skip it and keep
 ///     walking up — the submodule is part of the larger project.
 ///
-/// Returns `None` if no `.git` directory is found at any ancestor (i.e., the
-/// path is not inside a git repository), or if an I/O or parse error occurs.
-pub fn resolve_primary_root(cwd: &Path) -> Option<PathBuf> {
+/// Returns [`ResolvedWorktree::NotGitRepo`] if no `.git` entry is found at any
+/// ancestor, or if an I/O or parse error occurs.
+pub fn resolve_worktree(cwd: &Path) -> ResolvedWorktree {
     let mut current = cwd.to_path_buf();
 
     loop {
         let git_entry = current.join(".git");
 
         if git_entry.is_dir() {
-            // Primary worktree: .git is a directory.
-            return Some(current);
+            return ResolvedWorktree::Primary(current);
         }
 
         if git_entry.is_file()
             && let Some(root) = try_resolve_linked_worktree(&current, &git_entry)
         {
-            return Some(root);
+            return ResolvedWorktree::Linked(root);
         }
         // If .git is a file without commondir (submodule), skip and keep
         // walking up.
 
         if !current.pop() {
-            // Reached the filesystem root without finding .git.
-            return None;
+            return ResolvedWorktree::NotGitRepo;
         }
     }
+}
+
+/// Convenience wrapper: resolve the primary root path, discarding the
+/// primary-vs-linked distinction.
+///
+/// Returns `None` for [`ResolvedWorktree::NotGitRepo`].
+pub fn resolve_primary_root(cwd: &Path) -> Option<PathBuf> {
+    resolve_worktree(cwd).primary_root().map(Path::to_path_buf)
 }
 
 /// Returns `true` if `path` is the root of a primary (non-linked) git
@@ -226,6 +265,87 @@ mod tests {
     fn is_primary_worktree_false_for_non_git() {
         let tmp = tempfile::tempdir().unwrap();
         assert!(!is_primary_worktree(tmp.path()));
+    }
+
+    // ---------------------------------------------------------------
+    // resolve_worktree (enum variant checks)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn resolve_worktree_primary_at_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        init_git_repo(&repo);
+
+        let result = resolve_worktree(&repo);
+        assert!(matches!(result, ResolvedWorktree::Primary(_)));
+        assert!(!result.is_linked());
+        assert_paths_eq(result.primary_root().unwrap(), &repo);
+    }
+
+    #[test]
+    fn resolve_worktree_primary_from_subdirectory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        init_git_repo(&repo);
+
+        let subdir = repo.join("src").join("deep");
+        std::fs::create_dir_all(&subdir).unwrap();
+
+        let result = resolve_worktree(&subdir);
+        assert!(matches!(result, ResolvedWorktree::Primary(_)));
+        assert!(!result.is_linked());
+    }
+
+    #[test]
+    fn resolve_worktree_linked() {
+        let tmp = tempfile::tempdir().unwrap();
+        let main_dir = tmp.path().join("main");
+        std::fs::create_dir_all(&main_dir).unwrap();
+        init_git_repo(&main_dir);
+
+        let wt_dir = tmp.path().join("wt");
+        run_git(
+            &main_dir,
+            &["worktree", "add", wt_dir.to_str().unwrap(), "-b", "test"],
+        );
+
+        let result = resolve_worktree(&wt_dir);
+        assert!(matches!(result, ResolvedWorktree::Linked(_)));
+        assert!(result.is_linked());
+        assert_paths_eq(result.primary_root().unwrap(), &main_dir);
+    }
+
+    #[test]
+    fn resolve_worktree_linked_from_subdirectory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let main_dir = tmp.path().join("main");
+        std::fs::create_dir_all(&main_dir).unwrap();
+        init_git_repo(&main_dir);
+
+        let wt_dir = tmp.path().join("wt");
+        run_git(
+            &main_dir,
+            &["worktree", "add", wt_dir.to_str().unwrap(), "-b", "test"],
+        );
+
+        let subdir = wt_dir.join("src").join("deep");
+        std::fs::create_dir_all(&subdir).unwrap();
+
+        let result = resolve_worktree(&subdir);
+        assert!(matches!(result, ResolvedWorktree::Linked(_)));
+        assert!(result.is_linked());
+    }
+
+    #[test]
+    fn resolve_worktree_not_git_repo() {
+        let tmp = tempfile::tempdir().unwrap();
+        let result = resolve_worktree(tmp.path());
+        assert!(matches!(result, ResolvedWorktree::NotGitRepo));
+        assert!(result.primary_root().is_none());
+        assert!(!result.is_linked());
     }
 
     // ---------------------------------------------------------------

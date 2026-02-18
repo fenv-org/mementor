@@ -2,7 +2,6 @@ use std::io::{Read, Write};
 
 use mementor_lib::context::MementorContext;
 use mementor_lib::embedding::embedder::Embedder;
-use mementor_lib::git::is_primary_worktree;
 use mementor_lib::output::ConsoleIO;
 use mementor_lib::runtime::Runtime;
 
@@ -22,7 +21,7 @@ where
     ERR: Write,
 {
     // Guard: only allow enable from primary worktree
-    if !is_primary_worktree(runtime.context.cwd()) {
+    if runtime.context.is_linked_worktree() {
         anyhow::bail!(
             "mementor enable must be run from the primary worktree.\n\
              Primary worktree: {}\n\
@@ -766,9 +765,70 @@ mod tests {
         }
 
         let wt_dir = tmp.path().join("wt");
-        let ctx =
-            mementor_lib::context::MementorContext::with_cwd_and_log_dir(wt_dir, main_dir, None);
+        let ctx = mementor_lib::context::MementorContext::with_cwd_and_log_dir(
+            wt_dir, main_dir, true, None,
+        );
         let db = mementor_lib::db::driver::DatabaseDriver::in_memory("enable_reject_wt").unwrap();
+        let runtime = mementor_lib::runtime::Runtime { context: ctx, db };
+        let mut io = BufferedIO::new();
+
+        let result = crate::try_run(&["mementor", "enable"], &runtime, &mut io);
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("primary worktree"),
+            "Expected primary worktree error, got: {err}",
+        );
+    }
+
+    /// Running `mementor enable` from a **subdirectory** of the primary
+    /// worktree should succeed. The worktree kind is determined at startup
+    /// by `.git` entry type, not by path comparison — so subdirectories
+    /// inherit the "primary" classification from the root.
+    #[test]
+    fn try_run_enable_from_primary_subdirectory_should_succeed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("project");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir(root.join(".git")).unwrap();
+
+        let subdir = root.join("src").join("deep");
+        std::fs::create_dir_all(&subdir).unwrap();
+
+        // is_linked_worktree = false: cwd is inside the primary worktree.
+        let ctx =
+            mementor_lib::context::MementorContext::with_cwd_and_log_dir(subdir, root, false, None);
+        let db =
+            mementor_lib::db::driver::DatabaseDriver::in_memory("enable_primary_subdir").unwrap();
+        let runtime = mementor_lib::runtime::Runtime { context: ctx, db };
+        let mut io = BufferedIO::new();
+
+        let result = crate::try_run(&["mementor", "enable"], &runtime, &mut io);
+        assert!(
+            result.is_ok(),
+            "enable should succeed from a subdirectory of the primary worktree, \
+             but got error: {}",
+            result.unwrap_err(),
+        );
+    }
+
+    /// Running `mementor enable` from a **subdirectory** of a linked worktree
+    /// should be rejected, just like running from the linked worktree root.
+    #[test]
+    fn try_run_enable_rejects_linked_worktree_subdirectory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("main");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir(root.join(".git")).unwrap();
+
+        let wt_subdir = tmp.path().join("wt").join("src").join("lib");
+        std::fs::create_dir_all(&wt_subdir).unwrap();
+
+        // is_linked_worktree = true: cwd is inside a linked worktree.
+        let ctx = mementor_lib::context::MementorContext::with_cwd_and_log_dir(
+            wt_subdir, root, true, None,
+        );
+        let db =
+            mementor_lib::db::driver::DatabaseDriver::in_memory("enable_reject_wt_subdir").unwrap();
         let runtime = mementor_lib::runtime::Runtime { context: ctx, db };
         let mut io = BufferedIO::new();
 

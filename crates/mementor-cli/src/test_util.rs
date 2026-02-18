@@ -18,7 +18,7 @@ static ENTRY_COUNTER: AtomicUsize = AtomicUsize::new(0);
 pub fn runtime_in_memory(name: &str) -> (tempfile::TempDir, Runtime) {
     let tmp = tempfile::tempdir().unwrap();
     // Create a bare .git directory so that the tempdir looks like a primary
-    // worktree. This satisfies the `is_primary_worktree` guard in `enable`.
+    // worktree (useful for tests that check `is_primary_worktree`).
     std::fs::create_dir(tmp.path().join(".git")).unwrap();
     let ctx = MementorContext::new(tmp.path().to_path_buf());
     let db = DatabaseDriver::in_memory(name).unwrap();

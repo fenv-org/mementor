@@ -37,12 +37,28 @@ encounter a `.git` file without `commondir`, we skip it and continue walking up
 to find the actual project root. This ensures submodules are treated as part of
 the parent project.
 
+### `ResolvedWorktree` enum for symlink-safe classification
+
+Initial implementation used `is_primary_worktree(cwd)` in the `enable` guard,
+which checks `cwd.join(".git").is_dir()`. This has two problems:
+
+1. **Subdirectory bug**: Running `mementor enable` from `project/src/` would be
+   rejected because `project/src/.git` doesn't exist.
+2. **Path comparison is fragile**: Alternatives like `cwd.starts_with(project_root)`
+   break when symlinks are involved (`resolve_primary_root` canonicalizes linked
+   worktree paths but `std::env::current_dir()` may not match).
+
+The fix: `resolve_worktree(cwd)` returns a `ResolvedWorktree` enum
+(`Primary(PathBuf)` / `Linked(PathBuf)` / `NotGitRepo`) determined at startup
+by `.git` entry type inspection. The `is_linked` flag is stored in
+`MementorContext` and checked by the `enable` guard — no path comparison needed.
+
 ### `cwd` field in `MementorContext`
 
 We store both the original working directory (`cwd`) and the resolved primary
-root (`project_root`) in `MementorContext`. This allows `enable` to check if
-it's being run from a linked worktree while all path derivations use the
-resolved root.
+root (`project_root`) in `MementorContext`. The `is_linked_worktree` flag
+records whether we are in a linked worktree, determined at startup from the
+`.git` entry type.
 
 ### WAL mode for concurrent access
 
@@ -59,11 +75,15 @@ WAL mode + `busy_timeout` ensures safe concurrent access.
 - [x] Add primary worktree guard to `enable` command
 - [x] Enable WAL mode + `busy_timeout` in `connection.rs`
 - [x] Pass `cargo clippy -- -D warnings` and `cargo test` (90 tests, 0 failures)
+- [x] Fix enable guard subdirectory bug: replace `is_primary_worktree(cwd)`
+  with `ResolvedWorktree` enum + `is_linked_worktree` context flag
+- [x] Pass `cargo clippy -- -D warnings` and `cargo test` (141 tests, 0 failures)
 
 ## Results
 
-- 6 files modified/created
-- 90 tests passing (was 77 before; +11 git tests, +2 connection tests)
+- 7 files modified/created
+- 141 tests passing (was 77 before; +16 git tests, +2 connection tests,
+  +3 context tests, +2 enable guard tests)
 - Clippy clean with `-D warnings`
 
 ## Future Work
