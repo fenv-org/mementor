@@ -238,6 +238,11 @@ following lints are explicitly allowed:
 - `missing_errors_doc`
 - `missing_panics_doc`
 
+### Deno Scripts
+
+Deno TypeScript scripts live under `.claude/`. Follow the conventions in
+[`docs/deno-script-conventions.md`](docs/deno-script-conventions.md).
+
 ### Dependency Management
 
 Use `cargo add` to add dependencies. **Do not edit `Cargo.toml` dependency
