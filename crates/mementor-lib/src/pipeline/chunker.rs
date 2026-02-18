@@ -4,7 +4,7 @@ use text_splitter::{ChunkConfig, MarkdownSplitter};
 use tokenizers::Tokenizer;
 
 use crate::config::{CHUNK_OVERLAP_TOKENS, CHUNK_TARGET_TOKENS};
-use crate::transcript::parser::ParsedMessage;
+use crate::transcript::parser::{MessageRole, ParsedMessage};
 
 /// A turn groups consecutive messages for semantic coherence:
 /// Turn[n] = User[n] + Assistant[n] + User[n+1]
@@ -27,10 +27,7 @@ pub fn group_into_turns(messages: &[ParsedMessage]) -> Vec<Turn> {
     let mut i = 0;
 
     while i < messages.len() {
-        if messages[i].role == "user"
-            && i + 1 < messages.len()
-            && messages[i + 1].role == "assistant"
-        {
+        if messages[i].is_user() && i + 1 < messages.len() && messages[i + 1].is_assistant() {
             pairs.push((i, &messages[i], &messages[i + 1]));
             i += 2;
         } else {
@@ -46,6 +43,14 @@ pub fn group_into_turns(messages: &[ParsedMessage]) -> Vec<Turn> {
 
     for (idx, (_, user, assistant)) in pairs.iter().enumerate() {
         let mut text = format!("[User] {}\n\n[Assistant] {}", user.text, assistant.text);
+
+        // Append tool summary if the assistant used any tools
+        if let MessageRole::Assistant { tool_summary } = &assistant.role
+            && !tool_summary.is_empty()
+        {
+            write!(&mut text, "\n\n[Tools] {}", tool_summary.join(" | ")).unwrap();
+        }
+
         let mut provisional = true;
 
         // If there's a next pair, its user message is our forward context
@@ -155,8 +160,14 @@ mod tests {
             .enumerate()
             .map(|(i, (role, text))| ParsedMessage {
                 line_index: i,
-                role: (*role).to_string(),
                 text: (*text).to_string(),
+                role: match *role {
+                    "user" => MessageRole::User,
+                    "assistant" => MessageRole::Assistant {
+                        tool_summary: vec![],
+                    },
+                    _ => panic!("Invalid role: {role}"),
+                },
             })
             .collect()
     }
@@ -288,27 +299,85 @@ mod tests {
         let msgs = vec![
             ParsedMessage {
                 line_index: 5,
-                role: "user".to_string(),
                 text: "Q1".to_string(),
+                role: MessageRole::User,
             },
             ParsedMessage {
                 line_index: 6,
-                role: "assistant".to_string(),
                 text: "A1".to_string(),
+                role: MessageRole::Assistant {
+                    tool_summary: vec![],
+                },
             },
             ParsedMessage {
                 line_index: 10,
-                role: "user".to_string(),
                 text: "Q2".to_string(),
+                role: MessageRole::User,
             },
             ParsedMessage {
                 line_index: 11,
-                role: "assistant".to_string(),
                 text: "A2".to_string(),
+                role: MessageRole::Assistant {
+                    tool_summary: vec![],
+                },
             },
         ];
         let turns = group_into_turns(&msgs);
         assert_eq!(turns[0].line_index, 5);
         assert_eq!(turns[1].line_index, 10);
+    }
+
+    #[test]
+    fn tool_summary_appended_to_turn_text() {
+        let msgs = vec![
+            ParsedMessage {
+                line_index: 0,
+                text: "Fix CI".to_string(),
+                role: MessageRole::User,
+            },
+            ParsedMessage {
+                line_index: 1,
+                text: "Updated the workflow.".to_string(),
+                role: MessageRole::Assistant {
+                    tool_summary: vec![
+                        "Edit(.github/workflows/ci.yml)".to_string(),
+                        "Bash(cmd=\"cargo test\")".to_string(),
+                    ],
+                },
+            },
+            ParsedMessage {
+                line_index: 2,
+                text: "That works!".to_string(),
+                role: MessageRole::User,
+            },
+            ParsedMessage {
+                line_index: 3,
+                text: "Great.".to_string(),
+                role: MessageRole::Assistant {
+                    tool_summary: vec![],
+                },
+            },
+        ];
+        let turns = group_into_turns(&msgs);
+        assert_eq!(turns.len(), 2);
+        // First turn has tool summary between assistant and forward context
+        assert!(
+            turns[0]
+                .text
+                .contains("[Tools] Edit(.github/workflows/ci.yml) | Bash(cmd=\"cargo test\")")
+        );
+        assert!(turns[0].text.contains("[User] That works!"));
+        // [Tools] appears before forward context [User]
+        let tools_pos = turns[0].text.find("[Tools]").unwrap();
+        let fwd_pos = turns[0].text.rfind("[User]").unwrap();
+        assert!(tools_pos < fwd_pos);
+    }
+
+    #[test]
+    fn empty_tool_summary_not_appended() {
+        let msgs = make_messages(&[("user", "Hello"), ("assistant", "Hi there")]);
+        let turns = group_into_turns(&msgs);
+        assert_eq!(turns.len(), 1);
+        assert!(!turns[0].text.contains("[Tools]"));
     }
 }

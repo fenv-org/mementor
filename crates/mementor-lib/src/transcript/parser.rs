@@ -7,15 +7,32 @@ use tracing::{debug, warn};
 
 use super::types::TranscriptEntry;
 
+/// Role-specific data for a parsed message.
+#[derive(Debug)]
+pub enum MessageRole {
+    User,
+    Assistant { tool_summary: Vec<String> },
+}
+
 /// Parsed transcript messages with their line indices.
 #[derive(Debug)]
 pub struct ParsedMessage {
     /// 0-based line index in the JSONL file.
     pub line_index: usize,
-    /// Role: "user" or "assistant".
-    pub role: String,
     /// Extracted text content (`tool_use`/`tool_result` blocks stripped).
     pub text: String,
+    /// Role and role-specific data.
+    pub role: MessageRole,
+}
+
+impl ParsedMessage {
+    pub fn is_user(&self) -> bool {
+        matches!(self.role, MessageRole::User)
+    }
+
+    pub fn is_assistant(&self) -> bool {
+        matches!(self.role, MessageRole::Assistant { .. })
+    }
 }
 
 /// Read transcript JSONL file starting from `start_line` (0-based).
@@ -59,10 +76,13 @@ pub fn parse_transcript(path: &Path, start_line: usize) -> anyhow::Result<Vec<Pa
             debug!(line = line_idx, raw = %line, "skipped unknown content block type(s)");
         }
 
-        let role = message.role.as_str();
-        if role != "user" && role != "assistant" {
-            continue;
-        }
+        let role = match message.role.as_str() {
+            "assistant" => MessageRole::Assistant {
+                tool_summary: message.content.extract_tool_summary(),
+            },
+            "user" => MessageRole::User,
+            _ => continue,
+        };
 
         let text = message.content.extract_text();
         if text.trim().is_empty() {
@@ -71,8 +91,8 @@ pub fn parse_transcript(path: &Path, start_line: usize) -> anyhow::Result<Vec<Pa
 
         messages.push(ParsedMessage {
             line_index: line_idx,
-            role: message.role,
             text,
+            role,
         });
     }
 
@@ -105,10 +125,10 @@ mod tests {
 
         let msgs = parse_transcript(f.path(), 0).unwrap();
         assert_eq!(msgs.len(), 2);
-        assert_eq!(msgs[0].role, "user");
+        assert!(msgs[0].is_user());
         assert_eq!(msgs[0].text, "Hello");
         assert_eq!(msgs[0].line_index, 0);
-        assert_eq!(msgs[1].role, "assistant");
+        assert!(msgs[1].is_assistant());
         assert_eq!(msgs[1].text, "Hi there");
         assert_eq!(msgs[1].line_index, 1);
     }

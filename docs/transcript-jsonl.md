@@ -149,15 +149,52 @@ is a cryptographic signature for cache verification (discard for RAG purposes).
 
 **Tool use `input` field structure by tool name:**
 
+Verified against 3,459 tool_use blocks across 45 transcript files.
+
+*File tools:*
+
 | Tool | Key Fields |
 |------|------------|
-| Read | `{ "file_path": "/path/to/file" }` |
-| Edit | `{ "file_path": "/path/to/file", "old_string": "...", "new_string": "..." }` |
-| Write | `{ "file_path": "/path/to/file", "content": "..." }` |
-| Bash | `{ "command": "...", "description": "..." }` |
-| Grep | `{ "pattern": "...", "path": "..." }` |
-| Glob | `{ "pattern": "..." }` |
-| Task | `{ "prompt": "...", "description": "..." }` |
+| Read | `{ "file_path": "..." }` + optional `offset`, `limit` |
+| Edit | `{ "file_path": "...", "old_string": "...", "new_string": "..." }` + optional `replace_all` |
+| Write | `{ "file_path": "...", "content": "..." }` |
+| NotebookEdit | `{ "notebook_path": "...", "new_source": "..." }` + optional `cell_id`, `edit_mode`, `cell_type` |
+
+*Search tools:*
+
+| Tool | Key Fields |
+|------|------------|
+| Grep | `{ "pattern": "..." }` + optional `path`, `output_mode`, `type`, `glob`, `-A`/`-B`/`-C`, `-i`, `-n`, `multiline`, `head_limit`, `offset` |
+| Glob | `{ "pattern": "..." }` + optional `path` |
+
+*Execution tools:*
+
+| Tool | Key Fields |
+|------|------------|
+| Bash | `{ "command": "..." }` + optional `description`, `timeout`, `run_in_background`, `dangerouslyDisableSandbox` |
+| Task | `{ "description": "...", "subagent_type": "...", "prompt": "..." }` + optional `model`, `max_turns`, `run_in_background` |
+| Skill | `{ "skill": "..." }` + optional `args` |
+
+*Web tools:*
+
+| Tool | Key Fields |
+|------|------------|
+| WebFetch | `{ "url": "...", "prompt": "..." }` |
+| WebSearch | `{ "query": "..." }` + optional `allowed_domains`, `blocked_domains` |
+
+*Interactive / bookkeeping tools:*
+
+| Tool | Key Fields |
+|------|------------|
+| AskUserQuestion | `{ "questions": [...] }` — each question has `question`, `header`, `options`, `multiSelect` |
+| EnterPlanMode | `{}` (no fields) |
+| ExitPlanMode | `{}` + optional `allowedPrompts` |
+| TaskCreate | `{ "subject": "...", "description": "..." }` + optional `activeForm`, `metadata` |
+| TaskUpdate | `{ "taskId": "..." }` + optional `status`, `subject`, `description`, `activeForm`, `addBlocks`, `addBlockedBy` |
+| TaskList | `{}` (no fields) |
+| TaskOutput | `{ "task_id": "..." }` + optional `block`, `timeout` |
+| TaskStop | `{ "task_id": "..." }` |
+| TodoWrite | `{ "todos": [...] }` — each todo has `content`, `status`, `activeForm` |
 
 **Example (with thinking, text, and tool use):**
 
