@@ -196,8 +196,30 @@ fn summarize_skill(input: &serde_json::Value) -> String {
     format_kv("Skill", &pairs)
 }
 
+/// Returns `true` if the tool carries no useful search signal and should be
+/// excluded from tool summaries.
+fn is_skipped_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "AskUserQuestion"
+            | "EnterPlanMode"
+            | "ExitPlanMode"
+            | "TaskCreate"
+            | "TaskGet"
+            | "TaskUpdate"
+            | "TaskList"
+            | "TaskOutput"
+            | "TaskStop"
+            | "TodoWrite"
+    )
+}
+
 /// Produce a compact summary of a tool invocation.
 fn summarize_tool(name: &str, input: Option<&serde_json::Value>) -> String {
+    if is_skipped_tool(name) {
+        return String::new();
+    }
+
     let Some(input) = input else {
         return name.to_string();
     };
@@ -211,9 +233,6 @@ fn summarize_tool(name: &str, input: Option<&serde_json::Value>) -> String {
         "Skill" => summarize_skill(input),
         "WebFetch" => summarize_single_field("WebFetch", input, "url"),
         "WebSearch" => summarize_single_field("WebSearch", input, "query"),
-        // Skipped tools (no useful search signal)
-        "AskUserQuestion" | "EnterPlanMode" | "ExitPlanMode" | "TaskCreate" | "TaskUpdate"
-        | "TaskList" | "TaskOutput" | "TaskStop" | "TodoWrite" => String::new(),
         // Unrecognized tool: just the name
         _ => name.to_string(),
     }
@@ -593,6 +612,7 @@ mod tests {
                 {"type": "tool_use", "id": "t1", "name": "TaskCreate", "input": {"subject": "x", "description": "y"}},
                 {"type": "tool_use", "id": "t2", "name": "AskUserQuestion", "input": {"questions": []}},
                 {"type": "tool_use", "id": "t3", "name": "EnterPlanMode", "input": {}},
+                {"type": "tool_use", "id": "t4", "name": "TaskGet", "input": {"taskId": "1"}},
                 {"type": "text", "text": "Done"}
             ]
         }"#;
@@ -602,8 +622,25 @@ mod tests {
     }
 
     #[test]
+    fn extract_tool_summary_skipped_tools_without_input() {
+        // Skipped tools must be excluded even when input is None.
+        let json = r#"{
+            "role": "assistant",
+            "content": [
+                {"type": "tool_use", "id": "t1", "name": "AskUserQuestion"},
+                {"type": "tool_use", "id": "t2", "name": "EnterPlanMode"},
+                {"type": "tool_use", "id": "t3", "name": "TaskCreate"},
+                {"type": "tool_use", "id": "t4", "name": "TaskGet"}
+            ]
+        }"#;
+        let msg: Message = serde_json::from_str(json).unwrap();
+        let summaries = msg.content.extract_tool_summary();
+        assert!(summaries.is_empty());
+    }
+
+    #[test]
     fn truncate_multibyte_utf8_safe() {
-        // 3-byte UTF-8 chars: each "가" is 3 bytes
+        // 3-byte UTF-8 chars: each Korean Hangul syllable is 3 bytes
         let s = "가나다라마바사"; // 7 chars, 21 bytes
         let result = truncate(s, 5); // 5 bytes = 1 full char + boundary in 2nd char
         // Should truncate at char boundary (1 char = 3 bytes), not panic

@@ -147,7 +147,10 @@ Example output:
 - [x] Add test: `tool_summary_appended_to_turn_text`
 - [x] Add test: `empty_tool_summary_not_appended`
 - [x] Add test: `truncate_multibyte_utf8_safe`
-- [x] Verify: clippy + all tests pass (132 tests, 0 warnings)
+- [x] Add test: `extract_tool_summary_skipped_tools_without_input`
+- [x] Add test: `keep_tool_only_assistant_message`
+- [x] Add test: `skip_tool_only_assistant_with_skipped_tools`
+- [x] Verify: clippy + all tests pass (135 tests, 0 warnings)
 
 ## Post-review simplification
 
@@ -166,8 +169,27 @@ Applied 5 findings from code simplifier review:
 
 Net result: -10 lines (99 added, 109 removed).
 
+## Code review fixes
+
+Addressed 5 findings from automated code review (PR #25):
+
+1. **Fix `input: None` bypassing skipped-tools filter** (Bug): Extracted
+   `is_skipped_tool()` predicate and moved it before the `input` guard in
+   `summarize_tool()`. Previously, tools like `AskUserQuestion` with
+   `input: None` would early-return with the tool name instead of empty string.
+2. **Add `TaskGet` to skipped-tools list** (Omission): All other Task* tools
+   were skipped but `TaskGet` was missing. Added to `is_skipped_tool()`.
+3. **Keep tool-only assistant messages** (Behavior gap): Assistant messages
+   with only `tool_use` blocks (no text) were dropped by the empty-text check.
+   Now kept if they produce non-empty tool summaries.
+4. **Fix misleading debug log** (Pre-existing): Changed "skipped unknown
+   content block type(s)" to "message contains unknown content block type(s),
+   ignoring those blocks" — the message is not skipped, only the unknown blocks.
+5. **Fix Korean character in comment** (CLAUDE.md violation): Replaced
+   `each "가" is 3 bytes` with `each Korean Hangul syllable is 3 bytes`.
+
 ## Results
 
-- **Tests**: 117 → 132 (+15 new tests)
+- **Tests**: 117 → 135 (+18 new tests)
 - **Clippy**: zero warnings
-- **Scope**: ~240 lines of code + ~190 lines of test
+- **Scope**: ~260 lines of code + ~230 lines of test

@@ -73,7 +73,7 @@ pub fn parse_transcript(path: &Path, start_line: usize) -> anyhow::Result<Vec<Pa
         };
 
         if message.content.has_unknown_blocks() {
-            debug!(line = line_idx, raw = %line, "skipped unknown content block type(s)");
+            debug!(line = line_idx, raw = %line, "message contains unknown content block type(s), ignoring those blocks");
         }
 
         let role = match message.role.as_str() {
@@ -85,7 +85,13 @@ pub fn parse_transcript(path: &Path, start_line: usize) -> anyhow::Result<Vec<Pa
         };
 
         let text = message.content.extract_text();
-        if text.trim().is_empty() {
+        let has_tool_summary = matches!(
+            &role,
+            MessageRole::Assistant { tool_summary } if !tool_summary.is_empty()
+        );
+
+        // Keep the message if it has text content OR meaningful tool summaries.
+        if text.trim().is_empty() && !has_tool_summary {
             continue;
         }
 
@@ -199,6 +205,41 @@ mod tests {
         let msgs = parse_transcript(f.path(), 0).unwrap();
         assert_eq!(msgs.len(), 2);
         assert_eq!(msgs[1].text, "Because X\n\nHere is why.");
+    }
+
+    #[test]
+    fn keep_tool_only_assistant_message() {
+        // Assistant messages with only tool_use blocks (no text) should be kept
+        // if they produce non-empty tool summaries.
+        let f = write_jsonl(&[
+            r#"{"type":"user","message":{"role":"user","content":"Fix CI"}}"#,
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Edit","input":{"file_path":".github/workflows/ci.yml","old_string":"a","new_string":"b"}}]}}"#,
+        ]);
+
+        let msgs = parse_transcript(f.path(), 0).unwrap();
+        assert_eq!(msgs.len(), 2);
+        assert!(msgs[1].is_assistant());
+        assert!(msgs[1].text.is_empty());
+        assert_eq!(
+            msgs[1].role,
+            MessageRole::Assistant {
+                tool_summary: vec!["Edit(.github/workflows/ci.yml)".to_string()],
+            }
+        );
+    }
+
+    #[test]
+    fn skip_tool_only_assistant_with_skipped_tools() {
+        // Assistant messages with only skipped tools (no text, no useful summaries)
+        // should still be dropped.
+        let f = write_jsonl(&[
+            r#"{"type":"user","message":{"role":"user","content":"Hello"}}"#,
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"TaskCreate","input":{"subject":"x","description":"y"}}]}}"#,
+        ]);
+
+        let msgs = parse_transcript(f.path(), 0).unwrap();
+        assert_eq!(msgs.len(), 1);
+        assert!(msgs[0].is_user());
     }
 
     #[test]
