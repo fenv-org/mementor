@@ -8,7 +8,7 @@ use crate::transcript::parser::{MessageRole, ParsedMessage};
 
 /// A turn groups consecutive messages for semantic coherence:
 /// Turn[n] = User[n] + Assistant[n] + User[n+1]
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct Turn {
     /// JSONL line index of the first message in this turn (User[n]).
     pub line_index: usize,
@@ -175,10 +175,14 @@ mod tests {
     #[test]
     fn single_pair_is_provisional() {
         let msgs = make_messages(&[("user", "Hello"), ("assistant", "Hi there")]);
-        let turns = group_into_turns(&msgs);
-        assert_eq!(turns.len(), 1);
-        assert!(turns[0].provisional);
-        assert_eq!(turns[0].text, "[User] Hello\n\n[Assistant] Hi there");
+        assert_eq!(
+            group_into_turns(&msgs),
+            vec![Turn {
+                line_index: 0,
+                provisional: true,
+                text: "[User] Hello\n\n[Assistant] Hi there".to_string(),
+            }]
+        );
     }
 
     #[test]
@@ -189,12 +193,21 @@ mod tests {
             ("user", "Q2"),
             ("assistant", "A2"),
         ]);
-        let turns = group_into_turns(&msgs);
-        assert_eq!(turns.len(), 2);
-        assert!(!turns[0].provisional);
-        assert_eq!(turns[0].text, "[User] Q1\n\n[Assistant] A1\n\n[User] Q2");
-        assert!(turns[1].provisional);
-        assert_eq!(turns[1].text, "[User] Q2\n\n[Assistant] A2");
+        assert_eq!(
+            group_into_turns(&msgs),
+            vec![
+                Turn {
+                    line_index: 0,
+                    provisional: false,
+                    text: "[User] Q1\n\n[Assistant] A1\n\n[User] Q2".to_string(),
+                },
+                Turn {
+                    line_index: 2,
+                    provisional: true,
+                    text: "[User] Q2\n\n[Assistant] A2".to_string(),
+                },
+            ]
+        );
     }
 
     #[test]
@@ -207,13 +220,26 @@ mod tests {
             ("user", "Q3"),
             ("assistant", "A3"),
         ]);
-        let turns = group_into_turns(&msgs);
-        assert_eq!(turns.len(), 3);
-
-        // Q2 appears in both Turn 0 (forward context) and Turn 1 (start)
-        assert_eq!(turns[0].text, "[User] Q1\n\n[Assistant] A1\n\n[User] Q2");
-        assert_eq!(turns[1].text, "[User] Q2\n\n[Assistant] A2\n\n[User] Q3");
-        assert_eq!(turns[2].text, "[User] Q3\n\n[Assistant] A3");
+        assert_eq!(
+            group_into_turns(&msgs),
+            vec![
+                Turn {
+                    line_index: 0,
+                    provisional: false,
+                    text: "[User] Q1\n\n[Assistant] A1\n\n[User] Q2".to_string(),
+                },
+                Turn {
+                    line_index: 2,
+                    provisional: false,
+                    text: "[User] Q2\n\n[Assistant] A2\n\n[User] Q3".to_string(),
+                },
+                Turn {
+                    line_index: 4,
+                    provisional: true,
+                    text: "[User] Q3\n\n[Assistant] A3".to_string(),
+                },
+            ]
+        );
     }
 
     #[test]
@@ -323,11 +349,21 @@ mod tests {
                 },
             },
         ];
-        let turns = group_into_turns(&msgs);
-        assert_eq!(turns[0].line_index, 5);
-        assert_eq!(turns[0].text, "[User] Q1\n\n[Assistant] A1\n\n[User] Q2");
-        assert_eq!(turns[1].line_index, 10);
-        assert_eq!(turns[1].text, "[User] Q2\n\n[Assistant] A2");
+        assert_eq!(
+            group_into_turns(&msgs),
+            vec![
+                Turn {
+                    line_index: 5,
+                    provisional: false,
+                    text: "[User] Q1\n\n[Assistant] A1\n\n[User] Q2".to_string(),
+                },
+                Turn {
+                    line_index: 10,
+                    provisional: true,
+                    text: "[User] Q2\n\n[Assistant] A2".to_string(),
+                },
+            ]
+        );
     }
 
     #[test]
@@ -361,23 +397,37 @@ mod tests {
                 },
             },
         ];
-        let turns = group_into_turns(&msgs);
-        assert_eq!(turns.len(), 2);
         assert_eq!(
-            turns[0].text,
-            "[User] Fix CI\n\n\
-             [Assistant] Updated the workflow.\n\n\
-             [Tools] Edit(.github/workflows/ci.yml) | Bash(cmd=\"cargo test\")\n\n\
-             [User] That works!"
+            group_into_turns(&msgs),
+            vec![
+                Turn {
+                    line_index: 0,
+                    provisional: false,
+                    text: "[User] Fix CI\n\n\
+                           [Assistant] Updated the workflow.\n\n\
+                           [Tools] Edit(.github/workflows/ci.yml) | Bash(cmd=\"cargo test\")\n\n\
+                           [User] That works!"
+                        .to_string(),
+                },
+                Turn {
+                    line_index: 2,
+                    provisional: true,
+                    text: "[User] That works!\n\n[Assistant] Great.".to_string(),
+                },
+            ]
         );
-        assert_eq!(turns[1].text, "[User] That works!\n\n[Assistant] Great.");
     }
 
     #[test]
     fn empty_tool_summary_not_appended() {
         let msgs = make_messages(&[("user", "Hello"), ("assistant", "Hi there")]);
-        let turns = group_into_turns(&msgs);
-        assert_eq!(turns.len(), 1);
-        assert_eq!(turns[0].text, "[User] Hello\n\n[Assistant] Hi there");
+        assert_eq!(
+            group_into_turns(&msgs),
+            vec![Turn {
+                line_index: 0,
+                provisional: true,
+                text: "[User] Hello\n\n[Assistant] Hi there".to_string(),
+            }]
+        );
     }
 }
