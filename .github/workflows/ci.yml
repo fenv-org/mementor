@@ -51,11 +51,11 @@ jobs:
               fi
               arch -x86_64 /usr/local/bin/brew install onnxruntime
               mkdir -p .cache/ort/lib
-              cp -RH /usr/local/lib/libonnxruntime* .cache/ort/lib/
-              cp -RH /usr/local/lib/libabsl* .cache/ort/lib/
-              cp -RH /usr/local/lib/libprotobuf* .cache/ort/lib/
-              cp -RH /usr/local/lib/libre2* .cache/ort/lib/
-              cp -RH /usr/local/lib/libonnx* .cache/ort/lib/
+              cp -RHf /usr/local/lib/libonnxruntime* .cache/ort/lib/
+              cp -RHf /usr/local/lib/libabsl* .cache/ort/lib/
+              cp -RHf /usr/local/lib/libprotobuf* .cache/ort/lib/
+              cp -RHf /usr/local/lib/libre2* .cache/ort/lib/
+              cp -RHf /usr/local/lib/libonnx_proto* .cache/ort/lib/
             check-fmt: "true"
 
     steps:
