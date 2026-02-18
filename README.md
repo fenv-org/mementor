@@ -129,6 +129,25 @@ models/
   bge-small-en-v1.5/   ONNX model files
 ```
 
+## Development
+
+### Prerequisites
+
+- Rust 1.93.1+ (managed via [mise](https://mise.jdx.dev/))
+- On Intel Mac: Homebrew `onnxruntime` (see CLAUDE.md)
+
+### Setup
+
+```bash
+mise install
+mise run model:download
+cargo build
+```
+
+`mise run model:download` fetches the ONNX embedding model (~127 MB) from
+Hugging Face Hub. If you cloned with Git LFS, this step is skipped
+automatically.
+
 ## License
 
 This project is licensed under the [MIT License](LICENSE).
