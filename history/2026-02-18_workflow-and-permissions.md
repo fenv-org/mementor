@@ -67,13 +67,15 @@ Two problems addressed in this task:
 - [x] Update `/worktree` skill SKILL.md
 - [x] Set up `deno.json` with `deno add` for dependencies
 - [x] Add `docs/deno-script-conventions.md`
+- [x] Add Deno Scripts reference link in AGENTS.md Coding Conventions
 - [x] Verify: deno tests pass (10/10), rust tests pass (106/106)
 
 ## Results
 
 All changes implemented:
 
-- **AGENTS.md**: Added workflow step 6 (complete TODOs before PR)
+- **AGENTS.md**: Added workflow step 6 (complete TODOs before PR), Deno Scripts
+  reference in Coding Conventions
 - **`.claude/settings.json`**: Promoted 33 safe permissions, migrated `:*` to ` *`
 - **`.claude/settings.local.json`** (main worktree): Stripped to 5 risky
   permissions + enabledPlugins
