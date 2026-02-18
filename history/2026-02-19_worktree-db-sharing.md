@@ -77,12 +77,14 @@ WAL mode + `busy_timeout` ensures safe concurrent access.
 - [x] Pass `cargo clippy -- -D warnings` and `cargo test` (90 tests, 0 failures)
 - [x] Fix enable guard subdirectory bug: replace `is_primary_worktree(cwd)`
   with `ResolvedWorktree` enum + `is_linked_worktree` context flag
-- [x] Pass `cargo clippy -- -D warnings` and `cargo test` (141 tests, 0 failures)
+- [x] Remove dead code: `resolve_primary_root` and `is_primary_worktree`
+  (subsumed by `resolve_worktree` + `ResolvedWorktree` enum)
+- [x] Pass `cargo clippy -- -D warnings` and `cargo test` (134 tests, 0 failures)
 
 ## Results
 
 - 7 files modified/created
-- 141 tests passing (was 77 before; +16 git tests, +2 connection tests,
+- 134 tests passing (was 77 before; +9 git tests, +2 connection tests,
   +3 context tests, +2 enable guard tests)
 - Clippy clean with `-D warnings`
 

@@ -72,24 +72,6 @@ pub fn resolve_worktree(cwd: &Path) -> ResolvedWorktree {
     }
 }
 
-/// Convenience wrapper: resolve the primary root path, discarding the
-/// primary-vs-linked distinction.
-///
-/// Returns `None` for [`ResolvedWorktree::NotGitRepo`].
-pub fn resolve_primary_root(cwd: &Path) -> Option<PathBuf> {
-    resolve_worktree(cwd).primary_root().map(Path::to_path_buf)
-}
-
-/// Returns `true` if `path` is the root of a primary (non-linked) git
-/// worktree.
-///
-/// A primary worktree has `.git` as a **directory**. Linked worktrees and
-/// submodules have `.git` as a file, and non-git directories have no `.git`
-/// at all.
-pub fn is_primary_worktree(path: &Path) -> bool {
-    path.join(".git").is_dir()
-}
-
 /// Try to resolve a linked worktree's `.git` file to the primary root.
 ///
 /// Returns `Some(primary_root)` if this is a linked worktree (i.e.,
@@ -170,105 +152,7 @@ mod tests {
     }
 
     // ---------------------------------------------------------------
-    // Basic cases
-    // ---------------------------------------------------------------
-
-    #[test]
-    fn primary_worktree_returns_some_self() {
-        let tmp = tempfile::tempdir().unwrap();
-        let repo = tmp.path().join("repo");
-        std::fs::create_dir_all(&repo).unwrap();
-        init_git_repo(&repo);
-
-        let result = resolve_primary_root(&repo);
-        assert!(result.is_some());
-        assert_paths_eq(&result.unwrap(), &repo);
-    }
-
-    #[test]
-    fn linked_worktree_returns_some_primary_root() {
-        let tmp = tempfile::tempdir().unwrap();
-        let main_dir = tmp.path().join("main");
-        std::fs::create_dir_all(&main_dir).unwrap();
-        init_git_repo(&main_dir);
-
-        let wt_dir = tmp.path().join("worktree");
-        run_git(
-            &main_dir,
-            &[
-                "worktree",
-                "add",
-                wt_dir.to_str().unwrap(),
-                "-b",
-                "wt-branch",
-            ],
-        );
-
-        let result = resolve_primary_root(&wt_dir);
-        assert!(result.is_some());
-        assert_paths_eq(&result.unwrap(), &main_dir);
-    }
-
-    #[test]
-    fn subdirectory_walks_up_to_root() {
-        let tmp = tempfile::tempdir().unwrap();
-        let repo = tmp.path().join("repo");
-        std::fs::create_dir_all(&repo).unwrap();
-        init_git_repo(&repo);
-
-        let subdir = repo.join("src").join("deep");
-        std::fs::create_dir_all(&subdir).unwrap();
-
-        let result = resolve_primary_root(&subdir);
-        assert!(result.is_some());
-        assert_paths_eq(&result.unwrap(), &repo);
-    }
-
-    #[test]
-    fn non_git_dir_returns_none() {
-        let tmp = tempfile::tempdir().unwrap();
-        let result = resolve_primary_root(tmp.path());
-        assert!(result.is_none());
-    }
-
-    // ---------------------------------------------------------------
-    // is_primary_worktree
-    // ---------------------------------------------------------------
-
-    #[test]
-    fn is_primary_worktree_true_for_primary() {
-        let tmp = tempfile::tempdir().unwrap();
-        let repo = tmp.path().join("repo");
-        std::fs::create_dir_all(&repo).unwrap();
-        init_git_repo(&repo);
-
-        assert!(is_primary_worktree(&repo));
-    }
-
-    #[test]
-    fn is_primary_worktree_false_for_linked() {
-        let tmp = tempfile::tempdir().unwrap();
-        let main_dir = tmp.path().join("main");
-        std::fs::create_dir_all(&main_dir).unwrap();
-        init_git_repo(&main_dir);
-
-        let wt_dir = tmp.path().join("wt");
-        run_git(
-            &main_dir,
-            &["worktree", "add", wt_dir.to_str().unwrap(), "-b", "test"],
-        );
-
-        assert!(!is_primary_worktree(&wt_dir));
-    }
-
-    #[test]
-    fn is_primary_worktree_false_for_non_git() {
-        let tmp = tempfile::tempdir().unwrap();
-        assert!(!is_primary_worktree(tmp.path()));
-    }
-
-    // ---------------------------------------------------------------
-    // resolve_worktree (enum variant checks)
+    // resolve_worktree
     // ---------------------------------------------------------------
 
     #[test]
@@ -380,9 +264,9 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let (parent, sub_dir) = setup_repo_with_submodule(tmp.path());
 
-        let result = resolve_primary_root(&sub_dir);
-        assert!(result.is_some());
-        assert_paths_eq(&result.unwrap(), &parent);
+        let result = resolve_worktree(&sub_dir);
+        assert!(matches!(result, ResolvedWorktree::Primary(_)));
+        assert_paths_eq(result.primary_root().unwrap(), &parent);
     }
 
     #[test]
@@ -393,9 +277,9 @@ mod tests {
         let deep = sub_dir.join("src").join("lib");
         std::fs::create_dir_all(&deep).unwrap();
 
-        let result = resolve_primary_root(&deep);
-        assert!(result.is_some());
-        assert_paths_eq(&result.unwrap(), &parent);
+        let result = resolve_worktree(&deep);
+        assert!(matches!(result, ResolvedWorktree::Primary(_)));
+        assert_paths_eq(result.primary_root().unwrap(), &parent);
     }
 
     #[test]
@@ -435,9 +319,9 @@ mod tests {
         run_git(&top, &["submodule", "update", "--init", "--recursive"]);
 
         let nested = top.join("sub-a").join("sub-b");
-        let result = resolve_primary_root(&nested);
-        assert!(result.is_some());
-        assert_paths_eq(&result.unwrap(), &top);
+        let result = resolve_worktree(&nested);
+        assert!(matches!(result, ResolvedWorktree::Primary(_)));
+        assert_paths_eq(result.primary_root().unwrap(), &top);
     }
 
     #[test]
@@ -470,8 +354,8 @@ mod tests {
         run_git(&wt_dir, &["submodule", "update", "--init"]);
 
         let sub_in_wt = wt_dir.join("sub");
-        let result = resolve_primary_root(&sub_in_wt);
-        assert!(result.is_some());
-        assert_paths_eq(&result.unwrap(), &main_dir);
+        let result = resolve_worktree(&sub_in_wt);
+        assert!(matches!(result, ResolvedWorktree::Linked(_)));
+        assert_paths_eq(result.primary_root().unwrap(), &main_dir);
     }
 }
