@@ -63,18 +63,41 @@ fn escape_quotes(s: &str) -> String {
     s.replace('"', "\\\"")
 }
 
-/// Truncate a string to `max_len` characters, appending `...` if truncated.
+/// Truncate a string to `max_len` bytes at a safe UTF-8 boundary, appending
+/// `...` if truncated.
 fn truncate(s: &str, max_len: usize) -> String {
     if s.len() <= max_len {
         s.to_string()
     } else {
-        format!("{}...", &s[..max_len])
+        let end = s.floor_char_boundary(max_len);
+        format!("{}...", &s[..end])
     }
 }
 
 /// Extract a string field from a JSON value.
 fn json_str<'a>(input: &'a serde_json::Value, key: &str) -> Option<&'a str> {
     input.get(key)?.as_str()
+}
+
+/// Build `Name(k1="v1", k2="v2")` from pre-formatted key-value pairs.
+fn format_kv(name: &str, pairs: &[String]) -> String {
+    if pairs.is_empty() {
+        name.to_string()
+    } else {
+        format!("{name}({})", pairs.join(", "))
+    }
+}
+
+/// Summarize a tool with a single key field (e.g., `WebFetch`, `WebSearch`).
+fn summarize_single_field(name: &str, input: &serde_json::Value, key: &str) -> String {
+    if let Some(val) = json_str(input, key) {
+        format!(
+            "{name}({key}=\"{}\")",
+            escape_quotes(&truncate(val, MAX_VALUE_LEN))
+        )
+    } else {
+        name.to_string()
+    }
 }
 
 /// Summarize a file tool (Read, Edit, Write) invocation.
@@ -88,114 +111,89 @@ fn summarize_file_tool(name: &str, input: &serde_json::Value) -> String {
 
 /// Summarize a `NotebookEdit` invocation.
 fn summarize_notebook_edit(input: &serde_json::Value) -> String {
-    let path = json_str(input, "notebook_path");
-    let cell_id = json_str(input, "cell_id");
-    let edit_mode = json_str(input, "edit_mode");
-    match (path, cell_id, edit_mode) {
-        (Some(p), Some(c), Some(m)) => {
-            format!(
-                "NotebookEdit({p}, cell_id=\"{}\", edit_mode=\"{m}\")",
-                escape_quotes(c)
-            )
-        }
-        (Some(p), Some(c), None) => {
-            format!("NotebookEdit({p}, cell_id=\"{}\")", escape_quotes(c))
-        }
-        (Some(p), None, Some(m)) => format!("NotebookEdit({p}, edit_mode=\"{m}\")"),
-        (Some(p), None, None) => format!("NotebookEdit({p})"),
-        _ => "NotebookEdit".to_string(),
+    let mut parts = Vec::new();
+    if let Some(p) = json_str(input, "notebook_path") {
+        parts.push(p.to_string());
+    }
+    if let Some(c) = json_str(input, "cell_id") {
+        parts.push(format!("cell_id=\"{}\"", escape_quotes(c)));
+    }
+    if let Some(m) = json_str(input, "edit_mode") {
+        parts.push(format!("edit_mode=\"{m}\""));
+    }
+    if parts.is_empty() {
+        "NotebookEdit".to_string()
+    } else {
+        format!("NotebookEdit({})", parts.join(", "))
     }
 }
 
 /// Summarize a search tool (Grep, Glob) invocation.
 fn summarize_search_tool(name: &str, input: &serde_json::Value) -> String {
-    let pattern = json_str(input, "pattern");
-    let path = json_str(input, "path");
-    match (pattern, path) {
-        (Some(pat), Some(p)) => {
-            format!(
-                "{name}(pattern=\"{}\", path=\"{}\")",
-                escape_quotes(&truncate(pat, MAX_VALUE_LEN)),
-                escape_quotes(p),
-            )
-        }
-        (Some(pat), None) => {
-            format!(
-                "{name}(pattern=\"{}\")",
-                escape_quotes(&truncate(pat, MAX_VALUE_LEN)),
-            )
-        }
-        _ => name.to_string(),
+    let Some(pat) = json_str(input, "pattern") else {
+        return name.to_string();
+    };
+    let mut pairs = vec![format!(
+        "pattern=\"{}\"",
+        escape_quotes(&truncate(pat, MAX_VALUE_LEN))
+    )];
+    if let Some(p) = json_str(input, "path") {
+        pairs.push(format!("path=\"{}\"", escape_quotes(p)));
     }
+    format_kv(name, &pairs)
 }
 
 /// Summarize a `Bash` invocation.
 fn summarize_bash(input: &serde_json::Value) -> String {
-    let desc = json_str(input, "description");
-    let cmd = json_str(input, "command").map(|c| {
-        let first_line = c.lines().next().unwrap_or(c);
-        truncate(first_line, MAX_VALUE_LEN)
-    });
-    match (desc, cmd) {
-        (Some(d), Some(c)) => {
-            format!(
-                "Bash(desc=\"{}\", cmd=\"{}\")",
-                escape_quotes(&truncate(d, MAX_VALUE_LEN)),
-                escape_quotes(&c),
-            )
-        }
-        (Some(d), None) => {
-            format!(
-                "Bash(desc=\"{}\")",
-                escape_quotes(&truncate(d, MAX_VALUE_LEN))
-            )
-        }
-        (None, Some(c)) => format!("Bash(cmd=\"{}\")", escape_quotes(&c)),
-        (None, None) => "Bash".to_string(),
+    let mut pairs = Vec::new();
+    if let Some(d) = json_str(input, "description") {
+        pairs.push(format!(
+            "desc=\"{}\"",
+            escape_quotes(&truncate(d, MAX_VALUE_LEN))
+        ));
     }
+    if let Some(c) = json_str(input, "command") {
+        let first_line = c.lines().next().unwrap_or(c);
+        pairs.push(format!(
+            "cmd=\"{}\"",
+            escape_quotes(&truncate(first_line, MAX_VALUE_LEN))
+        ));
+    }
+    format_kv("Bash", &pairs)
 }
 
 /// Summarize a `Task` invocation.
 fn summarize_task(input: &serde_json::Value) -> String {
-    let desc = json_str(input, "description");
-    let prompt = json_str(input, "prompt").map(|p| {
-        let first_line = p.lines().next().unwrap_or(p);
-        truncate(first_line, MAX_VALUE_LEN)
-    });
-    match (desc, prompt) {
-        (Some(d), Some(p)) => {
-            format!(
-                "Task(desc=\"{}\", prompt=\"{}\")",
-                escape_quotes(&truncate(d, MAX_VALUE_LEN)),
-                escape_quotes(&p),
-            )
-        }
-        (Some(d), None) => {
-            format!(
-                "Task(desc=\"{}\")",
-                escape_quotes(&truncate(d, MAX_VALUE_LEN))
-            )
-        }
-        (None, Some(p)) => format!("Task(prompt=\"{}\")", escape_quotes(&p)),
-        (None, None) => "Task".to_string(),
+    let mut pairs = Vec::new();
+    if let Some(d) = json_str(input, "description") {
+        pairs.push(format!(
+            "desc=\"{}\"",
+            escape_quotes(&truncate(d, MAX_VALUE_LEN))
+        ));
     }
+    if let Some(p) = json_str(input, "prompt") {
+        let first_line = p.lines().next().unwrap_or(p);
+        pairs.push(format!(
+            "prompt=\"{}\"",
+            escape_quotes(&truncate(first_line, MAX_VALUE_LEN))
+        ));
+    }
+    format_kv("Task", &pairs)
 }
 
 /// Summarize a `Skill` invocation.
 fn summarize_skill(input: &serde_json::Value) -> String {
-    let skill = json_str(input, "skill");
-    let args = json_str(input, "args");
-    match (skill, args) {
-        (Some(s), Some(a)) => {
-            format!(
-                "Skill(skill=\"{}\", args=\"{}\")",
-                escape_quotes(s),
-                escape_quotes(&truncate(a, MAX_VALUE_LEN)),
-            )
-        }
-        (Some(s), None) => format!("Skill(skill=\"{}\")", escape_quotes(s)),
-        _ => "Skill".to_string(),
+    let mut pairs = Vec::new();
+    if let Some(s) = json_str(input, "skill") {
+        pairs.push(format!("skill=\"{}\"", escape_quotes(s)));
     }
+    if let Some(a) = json_str(input, "args") {
+        pairs.push(format!(
+            "args=\"{}\"",
+            escape_quotes(&truncate(a, MAX_VALUE_LEN))
+        ));
+    }
+    format_kv("Skill", &pairs)
 }
 
 /// Produce a compact summary of a tool invocation.
@@ -211,26 +209,8 @@ fn summarize_tool(name: &str, input: Option<&serde_json::Value>) -> String {
         "Bash" => summarize_bash(input),
         "Task" => summarize_task(input),
         "Skill" => summarize_skill(input),
-        "WebFetch" => {
-            if let Some(url) = json_str(input, "url") {
-                format!(
-                    "WebFetch(url=\"{}\")",
-                    escape_quotes(&truncate(url, MAX_VALUE_LEN))
-                )
-            } else {
-                "WebFetch".to_string()
-            }
-        }
-        "WebSearch" => {
-            if let Some(query) = json_str(input, "query") {
-                format!(
-                    "WebSearch(query=\"{}\")",
-                    escape_quotes(&truncate(query, MAX_VALUE_LEN)),
-                )
-            } else {
-                "WebSearch".to_string()
-            }
-        }
+        "WebFetch" => summarize_single_field("WebFetch", input, "url"),
+        "WebSearch" => summarize_single_field("WebSearch", input, "query"),
         // Skipped tools (no useful search signal)
         "AskUserQuestion" | "EnterPlanMode" | "ExitPlanMode" | "TaskCreate" | "TaskUpdate"
         | "TaskList" | "TaskOutput" | "TaskStop" | "TodoWrite" => String::new(),
@@ -619,6 +599,16 @@ mod tests {
         let msg: Message = serde_json::from_str(json).unwrap();
         let summaries = msg.content.extract_tool_summary();
         assert!(summaries.is_empty());
+    }
+
+    #[test]
+    fn truncate_multibyte_utf8_safe() {
+        // 3-byte UTF-8 chars: each "가" is 3 bytes
+        let s = "가나다라마바사"; // 7 chars, 21 bytes
+        let result = truncate(s, 5); // 5 bytes = 1 full char + boundary in 2nd char
+        // Should truncate at char boundary (1 char = 3 bytes), not panic
+        assert!(result.ends_with("..."));
+        assert!(result.starts_with('가'));
     }
 
     #[test]

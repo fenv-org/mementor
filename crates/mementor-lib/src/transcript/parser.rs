@@ -8,7 +8,7 @@ use tracing::{debug, warn};
 use super::types::TranscriptEntry;
 
 /// Role-specific data for a parsed message.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum MessageRole {
     User,
     Assistant { tool_summary: Vec<String> },
