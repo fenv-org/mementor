@@ -4,6 +4,7 @@
     clippy::cast_sign_loss
 )]
 
+use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::path::Path;
 
@@ -263,8 +264,7 @@ pub fn search_context(
     }
 
     // Phase 3: Dedup by turn — keep best chunk per (session_id, line_index)
-    let mut best_per_turn: std::collections::HashMap<(&str, usize), usize> =
-        std::collections::HashMap::new();
+    let mut best_per_turn: HashMap<(&str, usize), usize> = HashMap::new();
     for (idx, result) in after_distance.iter().enumerate() {
         let key = (result.session_id.as_str(), result.line_index);
         best_per_turn
@@ -281,18 +281,10 @@ pub fn search_context(
         .into_values()
         .map(|idx| &after_distance[idx])
         .collect();
-    deduped.sort_by(|a, b| {
-        a.distance
-            .partial_cmp(&b.distance)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    deduped.sort_by(|a, b| a.distance.total_cmp(&b.distance));
     deduped.truncate(k);
 
     debug!(after_dedup = deduped.len(), "Phase 3: dedup by turn");
-
-    if deduped.is_empty() {
-        return Ok(String::new());
-    }
 
     // Phase 4: Reconstruct full turn text from sibling chunks
     let turn_keys: Vec<(&str, usize)> = deduped

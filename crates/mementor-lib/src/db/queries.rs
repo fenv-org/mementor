@@ -212,7 +212,7 @@ pub fn get_turns_chunks(
 
     // Build dynamic WHERE clause with OR conditions
     let mut sql = String::from(
-        "SELECT session_id, line_index, chunk_index, content
+        "SELECT session_id, line_index, content
          FROM memories WHERE ",
     );
     let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
@@ -237,15 +237,14 @@ pub fn get_turns_chunks(
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, i64>(1)? as usize,
-                row.get::<_, i64>(2)?,
-                row.get::<_, String>(3)?,
+                row.get::<_, String>(2)?,
             ))
         })?
         .collect::<Result<Vec<_>, _>>()
         .context("Failed to query turn chunks")?;
 
     let mut result: HashMap<(String, usize), Vec<String>> = HashMap::new();
-    for (sid, line_idx, _chunk_idx, raw) in rows {
+    for (sid, line_idx, raw) in rows {
         result.entry((sid, line_idx)).or_default().push(raw);
     }
 
