@@ -15,7 +15,7 @@ run = "./scripts/download-model.sh"
 description = "Download ONNX model from Hugging Face if not present"
 
 [tasks."deno:test"]
-run = "deno test --allow-read --allow-write --allow-run=deno"
+run = "deno test -A"
 description = "Run Deno script tests"
 
 [tasks."deno:fmt"]

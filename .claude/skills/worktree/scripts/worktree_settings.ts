@@ -23,8 +23,13 @@ function tryReadJson(path: string): Settings | null {
   }
 }
 
+function dirname(path: string): string {
+  const idx = path.lastIndexOf("/");
+  return idx > 0 ? path.substring(0, idx) : path;
+}
+
 /** Extract git subcommands from permission rules, skipping -C entries. */
-function extractGitSubcmds(rules: string[]): string[] {
+export function extractGitSubcmds(rules: string[]): string[] {
   const subcmds: Set<string> = new Set();
   for (const rule of rules) {
     // Match Bash(git <subcmd>:*) or Bash(git <subcmd> *)
@@ -41,7 +46,7 @@ function extractGitSubcmds(rules: string[]): string[] {
   return [...subcmds];
 }
 
-function setup(_options: void, mainWt: string, newWt: string): void {
+export function setup(mainWt: string, newWt: string): void {
   const mainClaudeDir = `${mainWt}/.claude`;
   const newClaudeDir = `${newWt}/.claude`;
   const mainLocalPath = `${mainClaudeDir}/settings.local.json`;
@@ -108,7 +113,7 @@ function setup(_options: void, mainWt: string, newWt: string): void {
   }
 }
 
-function cleanup(_options: void, mainWt: string, removedWt: string): void {
+export function cleanup(mainWt: string, removedWt: string): void {
   const mainLocalPath = `${mainWt}/.claude/settings.local.json`;
   const removedLocalPath = `${removedWt}/.claude/settings.local.json`;
 
@@ -139,18 +144,23 @@ function cleanup(_options: void, mainWt: string, removedWt: string): void {
   writeJson(mainLocalPath, mainLocal);
 }
 
-function dirname(path: string): string {
-  const idx = path.lastIndexOf("/");
-  return idx > 0 ? path.substring(0, idx) : path;
+async function main(): Promise<void> {
+  await new Command()
+    .name("worktree-settings")
+    .description("Manage Claude Code settings for git worktrees")
+    .command("setup <main-wt:string> <new-wt:string>")
+    .description("Copy settings to new worktree and generate git -C entries")
+    .action((_options: void, mainWt: string, newWt: string) =>
+      setup(mainWt, newWt)
+    )
+    .command("cleanup <main-wt:string> <removed-wt:string>")
+    .description("Merge permissions and remove git -C entries")
+    .action((_options: void, mainWt: string, removedWt: string) =>
+      cleanup(mainWt, removedWt)
+    )
+    .parse(Deno.args);
 }
 
-await new Command()
-  .name("worktree-settings")
-  .description("Manage Claude Code settings for git worktrees")
-  .command("setup <main-wt:string> <new-wt:string>")
-  .description("Copy settings to new worktree and generate git -C entries")
-  .action(setup)
-  .command("cleanup <main-wt:string> <removed-wt:string>")
-  .description("Merge permissions and remove git -C entries")
-  .action(cleanup)
-  .parse(Deno.args);
+if (import.meta.main) {
+  await main();
+}

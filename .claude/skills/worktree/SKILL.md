@@ -76,7 +76,7 @@ Display the output to the user.
 3. **Set up Claude Code settings** for the new worktree:
    ```bash
    deno run --allow-read --allow-write \
-     <main-worktree>/.claude/skills/worktree/scripts/worktree-settings.ts \
+     <main-worktree>/.claude/skills/worktree/scripts/worktree_settings.ts \
      setup <main-worktree> <new-worktree>
    ```
    This copies `settings.local.json` to the new worktree and generates
@@ -111,7 +111,7 @@ and identify the associated branch.
 2. **Clean up Claude Code settings** before removing:
    ```bash
    deno run --allow-read --allow-write \
-     <main-worktree>/.claude/skills/worktree/scripts/worktree-settings.ts \
+     <main-worktree>/.claude/skills/worktree/scripts/worktree_settings.ts \
      cleanup <main-worktree> <removed-worktree-path>
    ```
    This merges any new permissions from the removed worktree back to the main

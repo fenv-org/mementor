@@ -24,9 +24,10 @@ Two problems addressed in this task:
   - Generates per-subcommand `git -C` permission patterns in main worktree
   - Cleans up `-C` entries when a worktree is removed
   - Merges newly-approved permissions back to main during worktree removal
-- Add integration tests for the Deno script
+- Add unit + integration tests for the Deno script
 - Add a separate CI workflow for Deno scripts with conditional success pattern
 - Update the `/worktree` skill to invoke the script
+- Document Deno script conventions
 
 ## Design Decisions
 
@@ -38,9 +39,15 @@ Two problems addressed in this task:
   pattern, generate per-subcommand patterns (e.g.,
   `Bash(git -C /full/path add *)`) for each worktree. This preserves
   fine-grained control.
-- **Deno for scripting**: Using Deno TypeScript with cliffy for CLI parsing.
-  Added to `mise.toml` (pinned to 2.6.10) for reproducible builds. Dependencies
-  managed via `deno add` with `deno.json` import map.
+- **Deno for scripting**: Using Deno TypeScript with cliffy for CLI parsing
+  and dax for subprocess execution in tests. Added to `mise.toml` (pinned to
+  2.6.10) for reproducible builds. Dependencies managed via `deno add` with
+  `deno.json` import map.
+- **`import.meta.main` guard**: Scripts define a `main()` function and guard
+  execution with `if (import.meta.main)`, enabling direct imports in tests
+  instead of fragile subprocess-only testing.
+- **Underscore file naming**: Following the Deno style guide
+  (`worktree_settings.ts`, not `worktree-settings.ts`).
 - **CI conditional success**: Uses `dorny/paths-filter` + `if: always()`
   status job pattern so the check succeeds when skipped (no `.ts` changes).
 - **Constraint**: Do not touch user-scope config files.
@@ -53,28 +60,30 @@ Two problems addressed in this task:
 - [x] Add workflow step 6 to AGENTS.md
 - [x] Promote safe permissions to `.claude/settings.json`
 - [x] Clean up `.claude/settings.local.json`
-- [x] Create `worktree-settings.ts` Deno script with cliffy
-- [x] Write 7 integration tests
-- [x] Add mise tasks (deno:test, deno:fmt, deno:check)
+- [x] Create `worktree_settings.ts` Deno script with cliffy
+- [x] Write unit + integration tests (10 tests: 3 unit, 2 direct, 5 integration)
+- [x] Add mise tasks (deno:test, deno:fmt, deno:check) with auto-discovery
 - [x] Create `.github/workflows/deno.yml` CI workflow
 - [x] Update `/worktree` skill SKILL.md
 - [x] Set up `deno.json` with `deno add` for dependencies
-- [x] Verify: deno tests pass (7/7), rust tests pass (106/106)
-- [x] Commit via `/commit`
+- [x] Add `docs/deno-script-conventions.md`
+- [x] Verify: deno tests pass (10/10), rust tests pass (106/106)
 
 ## Results
 
 All changes implemented:
 
 - **AGENTS.md**: Added workflow step 6 (complete TODOs before PR)
-- **`.claude/settings.json`**: Promoted 33 safe permissions, migrated `:*` → ` *`
+- **`.claude/settings.json`**: Promoted 33 safe permissions, migrated `:*` to ` *`
 - **`.claude/settings.local.json`** (main worktree): Stripped to 5 risky
   permissions + enabledPlugins
-- **`worktree-settings.ts`**: Deno CLI with `setup` and `cleanup` subcommands
-- **`worktree-settings_test.ts`**: 7 integration tests, all passing
-- **`deno.json`**: Import map for `@cliffy/command` and `@std/assert`
+- **`worktree_settings.ts`**: Deno CLI with `setup`/`cleanup` subcommands,
+  `import.meta.main` guard, exported functions for testability
+- **`worktree_settings_test.ts`**: 10 tests (unit + integration via dax)
+- **`deno.json`**: Import map for `@cliffy/command`, `@std/assert`, `@david/dax`
 - **`.github/workflows/deno.yml`**: CI with conditional success pattern
 - **`SKILL.md`**: Added settings script steps to add/remove flows
+- **`docs/deno-script-conventions.md`**: Deno script conventions doc
 
 ## Future Work
 
