@@ -36,5 +36,5 @@ the file must exist on disk before `cargo build`.
 - [x] Update `ci.yml`: disable LFS, add model cache + download
 - [x] Update `CLAUDE.md` Build section
 - [x] Update `README.md` with Development section
-- [ ] Commit via `/commit`
-- [ ] Create PR
+- [x] Commit via `/commit`
+- [x] Create PR
