@@ -267,11 +267,13 @@ and future work items.
 
 Every implementation task **must** follow this workflow:
 
-1. **Create a feature branch**: Use `git worktree add` to create a new worktree
-   with a feature branch. After creation, set up the worktree environment:
+1. **Create a feature branch**: Use the `AskUserQuestion` tool to ask the user
+   whether to use `git worktree add` (separate worktree) or `git checkout -b`
+   (current directory). If the user chooses a worktree, set up the environment
+   after creation:
    - Copy `mise.local.toml` from the main worktree (gitignored, machine-local).
+   - Run `mise trust` to trust the configuration.
    - Run `mise install` to install the toolchain.
-   - Run `mise trust` to trust the configuration
 
 2. **Create a history document**: Before writing any code, create a task
    document at `history/YYYY-MM-DD_task-name.md` with background, goals,
