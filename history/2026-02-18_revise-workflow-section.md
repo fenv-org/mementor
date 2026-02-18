@@ -34,4 +34,5 @@ Additionally, the `/commit` skill requirement was only mentioned in the
 - [x] Create feature branch (worktree)
 - [x] Create history document
 - [x] Edit CLAUDE.md Workflow section
-- [ ] Commit via `/commit`
+- [x] Commit via `/commit`
+- [x] Create PR
