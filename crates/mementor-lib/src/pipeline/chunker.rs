@@ -178,8 +178,7 @@ mod tests {
         let turns = group_into_turns(&msgs);
         assert_eq!(turns.len(), 1);
         assert!(turns[0].provisional);
-        assert!(turns[0].text.contains("[User] Hello"));
-        assert!(turns[0].text.contains("[Assistant] Hi there"));
+        assert_eq!(turns[0].text, "[User] Hello\n\n[Assistant] Hi there");
     }
 
     #[test]
@@ -193,8 +192,9 @@ mod tests {
         let turns = group_into_turns(&msgs);
         assert_eq!(turns.len(), 2);
         assert!(!turns[0].provisional);
-        assert!(turns[0].text.contains("[User] Q2")); // forward context
+        assert_eq!(turns[0].text, "[User] Q1\n\n[Assistant] A1\n\n[User] Q2");
         assert!(turns[1].provisional);
+        assert_eq!(turns[1].text, "[User] Q2\n\n[Assistant] A2");
     }
 
     #[test]
@@ -211,8 +211,9 @@ mod tests {
         assert_eq!(turns.len(), 3);
 
         // Q2 appears in both Turn 0 (forward context) and Turn 1 (start)
-        assert!(turns[0].text.contains("[User] Q2"));
-        assert!(turns[1].text.starts_with("[User] Q2"));
+        assert_eq!(turns[0].text, "[User] Q1\n\n[Assistant] A1\n\n[User] Q2");
+        assert_eq!(turns[1].text, "[User] Q2\n\n[Assistant] A2\n\n[User] Q3");
+        assert_eq!(turns[2].text, "[User] Q3\n\n[Assistant] A3");
     }
 
     #[test]
@@ -324,7 +325,9 @@ mod tests {
         ];
         let turns = group_into_turns(&msgs);
         assert_eq!(turns[0].line_index, 5);
+        assert_eq!(turns[0].text, "[User] Q1\n\n[Assistant] A1\n\n[User] Q2");
         assert_eq!(turns[1].line_index, 10);
+        assert_eq!(turns[1].text, "[User] Q2\n\n[Assistant] A2");
     }
 
     #[test]
@@ -360,17 +363,14 @@ mod tests {
         ];
         let turns = group_into_turns(&msgs);
         assert_eq!(turns.len(), 2);
-        // First turn has tool summary between assistant and forward context
-        assert!(
-            turns[0]
-                .text
-                .contains("[Tools] Edit(.github/workflows/ci.yml) | Bash(cmd=\"cargo test\")")
+        assert_eq!(
+            turns[0].text,
+            "[User] Fix CI\n\n\
+             [Assistant] Updated the workflow.\n\n\
+             [Tools] Edit(.github/workflows/ci.yml) | Bash(cmd=\"cargo test\")\n\n\
+             [User] That works!"
         );
-        assert!(turns[0].text.contains("[User] That works!"));
-        // [Tools] appears before forward context [User]
-        let tools_pos = turns[0].text.find("[Tools]").unwrap();
-        let fwd_pos = turns[0].text.rfind("[User]").unwrap();
-        assert!(tools_pos < fwd_pos);
+        assert_eq!(turns[1].text, "[User] That works!\n\n[Assistant] Great.");
     }
 
     #[test]
@@ -378,6 +378,6 @@ mod tests {
         let msgs = make_messages(&[("user", "Hello"), ("assistant", "Hi there")]);
         let turns = group_into_turns(&msgs);
         assert_eq!(turns.len(), 1);
-        assert!(!turns[0].text.contains("[Tools]"));
+        assert_eq!(turns[0].text, "[User] Hello\n\n[Assistant] Hi there");
     }
 }
