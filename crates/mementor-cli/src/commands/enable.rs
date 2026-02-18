@@ -766,18 +766,25 @@ mod tests {
 
         let wt_dir = tmp.path().join("wt");
         let ctx = mementor_lib::context::MementorContext::with_cwd_and_log_dir(
-            wt_dir, main_dir, true, None,
+            wt_dir,
+            main_dir.clone(),
+            true,
+            None,
         );
         let db = mementor_lib::db::driver::DatabaseDriver::in_memory("enable_reject_wt").unwrap();
         let runtime = mementor_lib::runtime::Runtime { context: ctx, db };
         let mut io = BufferedIO::new();
 
         let result = crate::try_run(&["mementor", "enable"], &runtime, &mut io);
-        let err = result.unwrap_err().to_string();
-        assert!(
-            err.contains("primary worktree"),
-            "Expected primary worktree error, got: {err}",
+        let expected = format!(
+            "mementor enable must be run from the primary worktree.\n\
+             Primary worktree: {}\n\
+             Run `mementor enable` from that directory instead.",
+            main_dir.display(),
         );
+        assert_eq!(result.unwrap_err().to_string(), expected);
+        assert_eq!(io.stdout_to_string(), "");
+        assert_eq!(io.stderr_to_string(), "");
     }
 
     /// Running `mementor enable` from a **subdirectory** of the primary
@@ -802,13 +809,22 @@ mod tests {
         let runtime = mementor_lib::runtime::Runtime { context: ctx, db };
         let mut io = BufferedIO::new();
 
-        let result = crate::try_run(&["mementor", "enable"], &runtime, &mut io);
-        assert!(
-            result.is_ok(),
-            "enable should succeed from a subdirectory of the primary worktree, \
-             but got error: {}",
-            result.unwrap_err(),
+        crate::try_run(&["mementor", "enable"], &runtime, &mut io).unwrap();
+
+        assert_eq!(io.stdout_to_string(), "mementor enabled successfully.\n");
+
+        let db_path = runtime.context.db_path();
+        let db_path = db_path.display();
+        let expected_stderr = trim_margin!(
+            "|Initializing database...
+             |  Database created at {db_path}
+             |Verifying embedding model...
+             |  Embedding model OK
+             |  .gitignore updated
+             |  Claude Code hooks configured
+             |"
         );
+        assert_eq!(io.stderr_to_string(), expected_stderr);
     }
 
     /// Running `mementor enable` from a **subdirectory** of a linked worktree
@@ -825,7 +841,10 @@ mod tests {
 
         // is_linked_worktree = true: cwd is inside a linked worktree.
         let ctx = mementor_lib::context::MementorContext::with_cwd_and_log_dir(
-            wt_subdir, root, true, None,
+            wt_subdir,
+            root.clone(),
+            true,
+            None,
         );
         let db =
             mementor_lib::db::driver::DatabaseDriver::in_memory("enable_reject_wt_subdir").unwrap();
@@ -833,11 +852,15 @@ mod tests {
         let mut io = BufferedIO::new();
 
         let result = crate::try_run(&["mementor", "enable"], &runtime, &mut io);
-        let err = result.unwrap_err().to_string();
-        assert!(
-            err.contains("primary worktree"),
-            "Expected primary worktree error, got: {err}",
+        let expected = format!(
+            "mementor enable must be run from the primary worktree.\n\
+             Primary worktree: {}\n\
+             Run `mementor enable` from that directory instead.",
+            root.display(),
         );
+        assert_eq!(result.unwrap_err().to_string(), expected);
+        assert_eq!(io.stdout_to_string(), "");
+        assert_eq!(io.stderr_to_string(), "");
     }
 
     #[test]

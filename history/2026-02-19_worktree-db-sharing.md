@@ -82,12 +82,15 @@ WAL mode + `busy_timeout` ensures safe concurrent access.
 - [x] Pass `cargo clippy -- -D warnings` and `cargo test` (134 tests, 0 failures)
 - [x] Fix CI: add `protocol.file.allow=always` to `run_git` helper for
   submodule tests (Git 2.38.1+ blocks local file transport by default)
+- [x] Fix enable guard tests to follow testing guidelines: full output
+  matching (`assert_eq!`), stdout/stderr verification, real git repo setup
+  kept for linked worktree test
 
 ## Results
 
 - 7 files modified/created
 - 134 tests passing (was 77 before; +9 git tests, +2 connection tests,
-  +3 context tests, +2 enable guard tests)
+  +3 context tests, +3 enable guard tests)
 - Clippy clean with `-D warnings`
 
 ## Future Work
