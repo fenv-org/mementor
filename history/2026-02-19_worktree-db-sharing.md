@@ -80,6 +80,8 @@ WAL mode + `busy_timeout` ensures safe concurrent access.
 - [x] Remove dead code: `resolve_primary_root` and `is_primary_worktree`
   (subsumed by `resolve_worktree` + `ResolvedWorktree` enum)
 - [x] Pass `cargo clippy -- -D warnings` and `cargo test` (134 tests, 0 failures)
+- [x] Fix CI: add `protocol.file.allow=always` to `run_git` helper for
+  submodule tests (Git 2.38.1+ blocks local file transport by default)
 
 ## Results
 

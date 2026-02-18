@@ -128,6 +128,7 @@ mod tests {
 
     fn run_git(dir: &Path, args: &[&str]) {
         let output = Command::new("git")
+            .args(&["-c", "protocol.file.allow=always"])
             .args(args)
             .current_dir(dir)
             .output()
