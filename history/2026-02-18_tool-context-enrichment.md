@@ -146,11 +146,28 @@ Example output:
 - [x] Add test: `extract_tool_summary_quote_escaping`
 - [x] Add test: `tool_summary_appended_to_turn_text`
 - [x] Add test: `empty_tool_summary_not_appended`
-- [x] Verify: clippy + all tests pass (131 tests, 0 warnings)
+- [x] Add test: `truncate_multibyte_utf8_safe`
+- [x] Verify: clippy + all tests pass (132 tests, 0 warnings)
+
+## Post-review simplification
+
+Applied 5 findings from code simplifier review:
+
+1. **Fix `truncate()` UTF-8 panic** (High): Use `floor_char_boundary()` instead
+   of byte slicing to avoid panic on multi-byte characters.
+2. **Extract `format_kv`/`summarize_single_field` helpers** (Medium): Reduce
+   duplication across `summarize_bash`, `summarize_task`, `summarize_skill`.
+3. **Simplify `WebFetch`/`WebSearch`** (Low): Replace inline match arms with
+   `summarize_single_field()`.
+4. **Simplify `summarize_notebook_edit`** (Low): Replace 5-arm match with
+   builder pattern that handles all 8 combinations.
+5. **Add `PartialEq` derive to `MessageRole`** (Low): Enables idiomatic
+   equality checks in tests.
+
+Net result: -10 lines (99 added, 109 removed).
 
 ## Results
 
-- **Tests**: 117 → 131 (+14 new tests)
+- **Tests**: 117 → 132 (+15 new tests)
 - **Clippy**: zero warnings
-- **Scope**: ~250 lines of code + ~180 lines of test (larger than estimated due
-  to comprehensive tool coverage and MessageRole redesign)
+- **Scope**: ~240 lines of code + ~190 lines of test
