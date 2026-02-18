@@ -2,14 +2,16 @@ use std::path::PathBuf;
 
 use mementor_lib::context::MementorContext;
 use mementor_lib::db::driver::DatabaseDriver;
+use mementor_lib::git::resolve_primary_root;
 use mementor_lib::output::StdIO;
 use mementor_lib::runtime::Runtime;
 
 fn main() -> anyhow::Result<()> {
-    // 1. Read env + create context
+    // 1. Read env + resolve project root through worktree chain
     let cwd = std::env::current_dir()?;
+    let project_root = resolve_primary_root(&cwd).unwrap_or_else(|| cwd.clone());
     let log_dir = std::env::var("MEMENTOR_LOG_DIR").ok().map(PathBuf::from);
-    let context = MementorContext::with_log_dir(cwd, log_dir);
+    let context = MementorContext::with_cwd_and_log_dir(cwd, project_root, log_dir);
 
     // 2. Init file logging (no-op if log_dir is None)
     mementor_cli::logging::init_file_logging(&context);

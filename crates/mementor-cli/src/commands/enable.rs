@@ -2,6 +2,7 @@ use std::io::{Read, Write};
 
 use mementor_lib::context::MementorContext;
 use mementor_lib::embedding::embedder::Embedder;
+use mementor_lib::git::is_primary_worktree;
 use mementor_lib::output::ConsoleIO;
 use mementor_lib::runtime::Runtime;
 
@@ -20,6 +21,16 @@ where
     OUT: Write,
     ERR: Write,
 {
+    // Guard: only allow enable from primary worktree
+    if !is_primary_worktree(runtime.context.cwd()) {
+        anyhow::bail!(
+            "mementor enable must be run from the primary worktree.\n\
+             Primary worktree: {}\n\
+             Run `mementor enable` from that directory instead.",
+            runtime.context.project_root().display(),
+        );
+    }
+
     // Step 1: Create DB (open creates parent dirs + schema + vector_init)
     writeln!(io.stderr(), "Initializing database...")?;
     let _conn = runtime.db.open()?;
@@ -712,6 +723,61 @@ mod tests {
                |"#,
         );
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn try_run_enable_rejects_linked_worktree() {
+        use std::process::Command;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let main_dir = tmp.path().join("main");
+        std::fs::create_dir_all(&main_dir).unwrap();
+
+        // Create a real git repo + linked worktree.
+        for (dir, args) in [
+            (main_dir.as_path(), vec!["init"]),
+            (main_dir.as_path(), vec!["config", "user.email", "t@t.com"]),
+            (main_dir.as_path(), vec!["config", "user.name", "Test"]),
+            (
+                main_dir.as_path(),
+                vec!["commit", "--allow-empty", "-m", "init"],
+            ),
+            (
+                main_dir.as_path(),
+                vec![
+                    "worktree",
+                    "add",
+                    tmp.path().join("wt").to_str().unwrap(),
+                    "-b",
+                    "test-wt",
+                ],
+            ),
+        ] {
+            let out = Command::new("git")
+                .args(&args)
+                .current_dir(dir)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+
+        let wt_dir = tmp.path().join("wt");
+        let ctx =
+            mementor_lib::context::MementorContext::with_cwd_and_log_dir(wt_dir, main_dir, None);
+        let db = mementor_lib::db::driver::DatabaseDriver::in_memory("enable_reject_wt").unwrap();
+        let runtime = mementor_lib::runtime::Runtime { context: ctx, db };
+        let mut io = BufferedIO::new();
+
+        let result = crate::try_run(&["mementor", "enable"], &runtime, &mut io);
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("primary worktree"),
+            "Expected primary worktree error, got: {err}",
+        );
     }
 
     #[test]
