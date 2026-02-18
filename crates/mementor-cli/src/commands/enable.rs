@@ -72,11 +72,13 @@ fn configure_hooks(ctx: &MementorContext) -> anyhow::Result<()> {
         std::fs::create_dir_all(parent)?;
     }
 
-    let mut settings: serde_json::Value = if settings_path.exists() {
+    let (mut settings, has_trailing_newline): (serde_json::Value, bool) = if settings_path.exists()
+    {
         let raw = std::fs::read_to_string(&settings_path)?;
-        serde_json::from_str(&raw)?
+        let trailing = raw.ends_with('\n');
+        (serde_json::from_str(&raw)?, trailing)
     } else {
-        serde_json::json!({})
+        (serde_json::json!({}), true)
     };
 
     // Build hook config
@@ -112,24 +114,27 @@ fn configure_hooks(ctx: &MementorContext) -> anyhow::Result<()> {
         .as_object_mut()
         .ok_or_else(|| anyhow::anyhow!("hooks field is not an object"))?;
 
-    // Add Stop hook (as array, append if exists)
-    merge_hook_array(hooks_obj, "Stop", stop_hook);
+    // Upsert mementor hooks (replace existing mementor entries, preserve others)
+    upsert_hook_entry(hooks_obj, "Stop", stop_hook);
+    upsert_hook_entry(hooks_obj, "UserPromptSubmit", prompt_hook);
+    upsert_hook_entry(hooks_obj, "PreCompact", pre_compact_hook);
 
-    // Add UserPromptSubmit hook
-    merge_hook_array(hooks_obj, "UserPromptSubmit", prompt_hook);
-
-    // Add PreCompact hook
-    merge_hook_array(hooks_obj, "PreCompact", pre_compact_hook);
-
-    // Write settings back
-    let formatted = serde_json::to_string_pretty(&settings)?;
+    // Write settings back, preserving original EOF newline behavior
+    let mut formatted = serde_json::to_string_pretty(&settings)?;
+    if has_trailing_newline {
+        formatted.push('\n');
+    }
     std::fs::write(&settings_path, formatted)?;
 
     Ok(())
 }
 
-/// Merge a hook entry into the hook array, avoiding duplicates.
-fn merge_hook_array(
+/// Upsert a mementor hook entry into the event array.
+///
+/// Removes any existing mementor entries (commands starting with "mementor")
+/// for this event, then appends the new entry. Non-mementor entries are
+/// preserved unchanged.
+fn upsert_hook_entry(
     hooks_obj: &mut serde_json::Map<String, serde_json::Value>,
     event_name: &str,
     hook_entry: serde_json::Value,
@@ -139,9 +144,8 @@ fn merge_hook_array(
         .or_insert_with(|| serde_json::json!([]));
 
     if let Some(arr) = arr.as_array_mut() {
-        // Check if mementor hook already exists
-        let has_mementor = arr.iter().any(|entry| {
-            entry["hooks"].as_array().is_some_and(|hooks| {
+        arr.retain(|entry| {
+            !entry["hooks"].as_array().is_some_and(|hooks| {
                 hooks.iter().any(|h| {
                     h["command"]
                         .as_str()
@@ -150,9 +154,7 @@ fn merge_hook_array(
             })
         });
 
-        if !has_mementor {
-            arr.push(hook_entry);
-        }
+        arr.push(hook_entry);
     }
 }
 
@@ -254,5 +256,443 @@ mod tests {
         let settings: serde_json::Value = serde_json::from_str(&raw).unwrap();
         assert_eq!(settings["customKey"], "customValue");
         assert!(settings["hooks"]["Stop"].is_array());
+    }
+
+    /// Returns the expected JSON for only-mementor-hooks settings.
+    fn mementor_hooks_only() -> String {
+        crate::test_util::_trim_margin(
+            r#"|{
+               |  "hooks": {
+               |    "Stop": [
+               |      {
+               |        "hooks": [
+               |          {
+               |            "type": "command",
+               |            "command": "mementor hook stop"
+               |          }
+               |        ]
+               |      }
+               |    ],
+               |    "UserPromptSubmit": [
+               |      {
+               |        "hooks": [
+               |          {
+               |            "type": "command",
+               |            "command": "mementor hook user-prompt-submit"
+               |          }
+               |        ]
+               |      }
+               |    ],
+               |    "PreCompact": [
+               |      {
+               |        "hooks": [
+               |          {
+               |            "type": "command",
+               |            "command": "mementor hook pre-compact"
+               |          }
+               |        ]
+               |      }
+               |    ]
+               |  }
+               |}"#,
+        )
+    }
+
+    #[test]
+    fn try_run_enable_preserves_key_order() {
+        let (_tmp, runtime) = runtime_in_memory("enable_key_order");
+        let mut io = BufferedIO::new();
+
+        let claude_dir = runtime
+            .context
+            .claude_settings_path()
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        std::fs::write(
+            runtime.context.claude_settings_path(),
+            r#"{"permissions": {"allow": ["Bash(cargo:*)"]}, "hooks": {}}"#,
+        )
+        .unwrap();
+
+        crate::try_run(&["mementor", "enable"], &runtime, &mut io).unwrap();
+
+        let actual = std::fs::read_to_string(runtime.context.claude_settings_path()).unwrap();
+        let expected = crate::test_util::_trim_margin(
+            r#"|{
+               |  "permissions": {
+               |    "allow": [
+               |      "Bash(cargo:*)"
+               |    ]
+               |  },
+               |  "hooks": {
+               |    "Stop": [
+               |      {
+               |        "hooks": [
+               |          {
+               |            "type": "command",
+               |            "command": "mementor hook stop"
+               |          }
+               |        ]
+               |      }
+               |    ],
+               |    "UserPromptSubmit": [
+               |      {
+               |        "hooks": [
+               |          {
+               |            "type": "command",
+               |            "command": "mementor hook user-prompt-submit"
+               |          }
+               |        ]
+               |      }
+               |    ],
+               |    "PreCompact": [
+               |      {
+               |        "hooks": [
+               |          {
+               |            "type": "command",
+               |            "command": "mementor hook pre-compact"
+               |          }
+               |        ]
+               |      }
+               |    ]
+               |  }
+               |}"#,
+        );
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn try_run_enable_preserves_eof_newline() {
+        let (_tmp, runtime) = runtime_in_memory("enable_eof_nl");
+        let mut io = BufferedIO::new();
+
+        let claude_dir = runtime
+            .context
+            .claude_settings_path()
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        std::fs::create_dir_all(&claude_dir).unwrap();
+
+        let hooks_only = mementor_hooks_only();
+
+        // With trailing newline
+        std::fs::write(runtime.context.claude_settings_path(), "{}\n").unwrap();
+        crate::try_run(&["mementor", "enable"], &runtime, &mut io).unwrap();
+        let actual = std::fs::read_to_string(runtime.context.claude_settings_path()).unwrap();
+        assert_eq!(actual, format!("{hooks_only}\n"));
+
+        // Without trailing newline
+        std::fs::write(runtime.context.claude_settings_path(), "{}").unwrap();
+        let mut io2 = BufferedIO::new();
+        crate::try_run(&["mementor", "enable"], &runtime, &mut io2).unwrap();
+        let actual = std::fs::read_to_string(runtime.context.claude_settings_path()).unwrap();
+        assert_eq!(actual, hooks_only);
+    }
+
+    #[test]
+    fn try_run_enable_new_file_gets_trailing_newline() {
+        let (_tmp, runtime) = runtime_in_memory("enable_new_file_nl");
+        let mut io = BufferedIO::new();
+
+        crate::try_run(&["mementor", "enable"], &runtime, &mut io).unwrap();
+
+        let actual = std::fs::read_to_string(runtime.context.claude_settings_path()).unwrap();
+        assert_eq!(actual, format!("{}\n", mementor_hooks_only()));
+    }
+
+    #[test]
+    fn try_run_enable_upserts_mementor_hooks() {
+        let (_tmp, runtime) = runtime_in_memory("enable_upsert");
+        let mut io = BufferedIO::new();
+
+        let claude_dir = runtime
+            .context
+            .claude_settings_path()
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        std::fs::write(
+            runtime.context.claude_settings_path(),
+            crate::test_util::_trim_margin(
+                r#"|{
+                   |  "hooks": {
+                   |    "Stop": [
+                   |      {
+                   |        "hooks": [
+                   |          {
+                   |            "type": "command",
+                   |            "command": "mementor hook old-stop-command"
+                   |          }
+                   |        ]
+                   |      }
+                   |    ]
+                   |  }
+                   |}
+                   |"#,
+            ),
+        )
+        .unwrap();
+
+        crate::try_run(&["mementor", "enable"], &runtime, &mut io).unwrap();
+
+        let actual = std::fs::read_to_string(runtime.context.claude_settings_path()).unwrap();
+        assert_eq!(actual, format!("{}\n", mementor_hooks_only()));
+    }
+
+    #[test]
+    fn try_run_enable_preserves_non_mementor_hooks_in_same_event() {
+        let (_tmp, runtime) = runtime_in_memory("enable_non_mementor");
+        let mut io = BufferedIO::new();
+
+        let claude_dir = runtime
+            .context
+            .claude_settings_path()
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        std::fs::write(
+            runtime.context.claude_settings_path(),
+            crate::test_util::_trim_margin(
+                r#"|{
+                   |  "hooks": {
+                   |    "Stop": [
+                   |      {
+                   |        "hooks": [
+                   |          {
+                   |            "type": "command",
+                   |            "command": "other-tool hook stop"
+                   |          }
+                   |        ]
+                   |      }
+                   |    ]
+                   |  }
+                   |}
+                   |"#,
+            ),
+        )
+        .unwrap();
+
+        crate::try_run(&["mementor", "enable"], &runtime, &mut io).unwrap();
+
+        let actual = std::fs::read_to_string(runtime.context.claude_settings_path()).unwrap();
+        let expected = crate::test_util::_trim_margin(
+            r#"|{
+               |  "hooks": {
+               |    "Stop": [
+               |      {
+               |        "hooks": [
+               |          {
+               |            "type": "command",
+               |            "command": "other-tool hook stop"
+               |          }
+               |        ]
+               |      },
+               |      {
+               |        "hooks": [
+               |          {
+               |            "type": "command",
+               |            "command": "mementor hook stop"
+               |          }
+               |        ]
+               |      }
+               |    ],
+               |    "UserPromptSubmit": [
+               |      {
+               |        "hooks": [
+               |          {
+               |            "type": "command",
+               |            "command": "mementor hook user-prompt-submit"
+               |          }
+               |        ]
+               |      }
+               |    ],
+               |    "PreCompact": [
+               |      {
+               |        "hooks": [
+               |          {
+               |            "type": "command",
+               |            "command": "mementor hook pre-compact"
+               |          }
+               |        ]
+               |      }
+               |    ]
+               |  }
+               |}
+               |"#,
+        );
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn try_run_enable_preserves_unrelated_hook_events() {
+        let (_tmp, runtime) = runtime_in_memory("enable_unrelated_events");
+        let mut io = BufferedIO::new();
+
+        let claude_dir = runtime
+            .context
+            .claude_settings_path()
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        std::fs::write(
+            runtime.context.claude_settings_path(),
+            crate::test_util::_trim_margin(
+                r#"|{
+                   |  "hooks": {
+                   |    "PreToolUse": [
+                   |      {
+                   |        "hooks": [
+                   |          {
+                   |            "type": "command",
+                   |            "command": "my-linter check"
+                   |          }
+                   |        ]
+                   |      }
+                   |    ]
+                   |  }
+                   |}
+                   |"#,
+            ),
+        )
+        .unwrap();
+
+        crate::try_run(&["mementor", "enable"], &runtime, &mut io).unwrap();
+
+        let actual = std::fs::read_to_string(runtime.context.claude_settings_path()).unwrap();
+        let expected = crate::test_util::_trim_margin(
+            r#"|{
+               |  "hooks": {
+               |    "PreToolUse": [
+               |      {
+               |        "hooks": [
+               |          {
+               |            "type": "command",
+               |            "command": "my-linter check"
+               |          }
+               |        ]
+               |      }
+               |    ],
+               |    "Stop": [
+               |      {
+               |        "hooks": [
+               |          {
+               |            "type": "command",
+               |            "command": "mementor hook stop"
+               |          }
+               |        ]
+               |      }
+               |    ],
+               |    "UserPromptSubmit": [
+               |      {
+               |        "hooks": [
+               |          {
+               |            "type": "command",
+               |            "command": "mementor hook user-prompt-submit"
+               |          }
+               |        ]
+               |      }
+               |    ],
+               |    "PreCompact": [
+               |      {
+               |        "hooks": [
+               |          {
+               |            "type": "command",
+               |            "command": "mementor hook pre-compact"
+               |          }
+               |        ]
+               |      }
+               |    ]
+               |  }
+               |}
+               |"#,
+        );
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn try_run_enable_preserves_non_hooks_keys() {
+        let (_tmp, runtime) = runtime_in_memory("enable_non_hooks_keys");
+        let mut io = BufferedIO::new();
+
+        let claude_dir = runtime
+            .context
+            .claude_settings_path()
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        std::fs::write(
+            runtime.context.claude_settings_path(),
+            crate::test_util::_trim_margin(
+                r#"|{
+                   |  "attribution": {"commit": "", "pr": ""},
+                   |  "permissions": {"allow": ["Bash(cargo:*)", "Skill(commit)"]},
+                   |  "env": {"MY_VAR": "value"}
+                   |}
+                   |"#,
+            ),
+        )
+        .unwrap();
+
+        crate::try_run(&["mementor", "enable"], &runtime, &mut io).unwrap();
+
+        let actual = std::fs::read_to_string(runtime.context.claude_settings_path()).unwrap();
+        let expected = crate::test_util::_trim_margin(
+            r#"|{
+               |  "attribution": {
+               |    "commit": "",
+               |    "pr": ""
+               |  },
+               |  "permissions": {
+               |    "allow": [
+               |      "Bash(cargo:*)",
+               |      "Skill(commit)"
+               |    ]
+               |  },
+               |  "env": {
+               |    "MY_VAR": "value"
+               |  },
+               |  "hooks": {
+               |    "Stop": [
+               |      {
+               |        "hooks": [
+               |          {
+               |            "type": "command",
+               |            "command": "mementor hook stop"
+               |          }
+               |        ]
+               |      }
+               |    ],
+               |    "UserPromptSubmit": [
+               |      {
+               |        "hooks": [
+               |          {
+               |            "type": "command",
+               |            "command": "mementor hook user-prompt-submit"
+               |          }
+               |        ]
+               |      }
+               |    ],
+               |    "PreCompact": [
+               |      {
+               |        "hooks": [
+               |          {
+               |            "type": "command",
+               |            "command": "mementor hook pre-compact"
+               |          }
+               |        ]
+               |      }
+               |    ]
+               |  }
+               |}
+               |"#,
+        );
+        assert_eq!(actual, expected);
     }
 }
