@@ -188,8 +188,17 @@ Addressed 5 findings from automated code review (PR #25):
 5. **Fix Korean character in comment** (CLAUDE.md violation): Replaced
    `each "가" is 3 bytes` with `each Korean Hangul syllable is 3 bytes`.
 
+## Test quality improvements
+
+- Replaced all `contains()` / `starts_with()` / position-based assertions in
+  chunker tests with `assert_eq!` on full expected text.
+- Derived `PartialEq` on `Turn` struct and rewrote all 6 turn-grouping tests
+  to compare complete `Turn` structs (line_index + provisional + text) in a
+  single `assert_eq!` call.
+
 ## Results
 
 - **Tests**: 117 → 135 (+18 new tests)
 - **Clippy**: zero warnings
-- **Scope**: ~260 lines of code + ~230 lines of test
+- **Scope**: ~260 lines of code + ~250 lines of test
+- **PR**: https://github.com/fenv-org/mementor/pull/25
