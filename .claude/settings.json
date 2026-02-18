@@ -4,6 +4,16 @@
     "pr": ""
   },
   "hooks": {
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "command": "mementor hook pre-compact",
+            "type": "command"
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [
