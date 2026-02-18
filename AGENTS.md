@@ -261,7 +261,9 @@ and future work items.
 
 ## Workflow
 
-Every implementation task **must** follow this workflow:
+Every implementation task **must** follow this workflow. **When creating
+implementation plans (e.g., in plan mode), explicitly include every step
+below.** Do not omit or assume any step is implicit.
 
 1. **Create a feature branch**: Use the `AskUserQuestion` tool to ask the user
    whether to use a separate worktree or the current directory. If worktree,
@@ -269,14 +271,19 @@ Every implementation task **must** follow this workflow:
 
 2. **Create a history document**: Before writing any code, create a task
    document at `history/YYYY-MM-DD_task-name.md` with background, goals,
-   design decisions, and a TODO checklist.
+   design decisions, and a TODO checklist. This document is the implementation
+   plan — do not start coding until it exists.
 
-3. **Track progress**: Use todo tracking throughout the session. Mark items as
-   in-progress when starting and completed when done.
+3. **Implement and track progress**: Use todo tracking throughout the session.
+   Mark items as in-progress when starting and completed when done.
 
-4. **Update the history document**: When the task is complete, update the
-   history document with final results, any deviations from the original plan,
-   and future work items.
+4. **Update the history document**: Before every commit, update the history
+   document with current results, any deviations from the original plan, and
+   future work items. Keep it up to date as work progresses.
+
+5. **Commit via `/commit`**: Use the `/commit` skill for every commit. Do not
+   run `git commit` directly. Always update the history document (step 4)
+   before committing.
 
 ## Testing
 
