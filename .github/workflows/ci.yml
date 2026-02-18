@@ -22,7 +22,6 @@ jobs:
 
     env:
       ORT_DYLIB_PATH: ${{ matrix.ort-dylib-path }}
-      DYLD_LIBRARY_PATH: ${{ matrix.ort-dylib-path != '' && '/usr/local/lib' || '' }}
 
     strategy:
       fail-fast: false
@@ -41,22 +40,14 @@ jobs:
             ort-dylib-path: "/usr/local/lib/libonnxruntime.dylib"
             extra-rustup: "rustup target add x86_64-apple-darwin"
             setup-ort: |
-              if [ -d ".cache/ort" ]; then
-                echo "Restoring ONNX Runtime from cache"
-                sudo mkdir -p /usr/local/lib
-                sudo cp -a .cache/ort/lib/* /usr/local/lib/
+              if [ -f /usr/local/lib/libonnxruntime.dylib ]; then
+                echo "ONNX Runtime already available (from cache)"
                 exit 0
               fi
               if [ ! -f /usr/local/bin/brew ]; then
                 arch -x86_64 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
               fi
               arch -x86_64 /usr/local/bin/brew install onnxruntime
-              mkdir -p .cache/ort/lib
-              cp -RHf /usr/local/lib/libonnxruntime* .cache/ort/lib/
-              cp -RHf /usr/local/lib/libabsl* .cache/ort/lib/
-              cp -RHf /usr/local/lib/libprotobuf* .cache/ort/lib/
-              cp -RHf /usr/local/lib/libre2* .cache/ort/lib/
-              cp -RHf /usr/local/lib/libonnx_proto* .cache/ort/lib/
             check-fmt: "true"
 
     steps:
@@ -78,12 +69,30 @@ jobs:
           key: ${{ matrix.cache-key-prefix }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ matrix.cache-key-prefix }}-cargo-
 
+      - name: Prepare x86_64 Homebrew directories
+        if: matrix.arch == 'x86_64'
+        run: |
+          sudo mkdir -p /usr/local/Cellar /usr/local/opt /usr/local/lib /usr/local/include
+          sudo chown -R "$(whoami)" /usr/local/Cellar /usr/local/opt /usr/local/lib /usr/local/include
+
       - name: Cache x86_64 ONNX Runtime
+        if: matrix.arch == 'x86_64'
         uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
         with:
-          path: .cache/ort
-          key: ${{ matrix.cache-key-prefix }}-ort-v3
-          restore-keys: ${{ matrix.cache-key-prefix }}-ort-v3
+          path: |
+            /usr/local/Cellar/onnxruntime
+            /usr/local/Cellar/abseil
+            /usr/local/Cellar/protobuf
+            /usr/local/Cellar/onnx
+            /usr/local/Cellar/re2
+            /usr/local/opt/onnxruntime
+            /usr/local/opt/abseil
+            /usr/local/opt/protobuf
+            /usr/local/opt/onnx
+            /usr/local/opt/re2
+            /usr/local/lib
+          key: ${{ matrix.cache-key-prefix }}-ort-v4
+          restore-keys: ${{ matrix.cache-key-prefix }}-ort-v4
 
       - name: Install Rust components
         run: |
