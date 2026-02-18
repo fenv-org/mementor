@@ -22,6 +22,7 @@ jobs:
 
     env:
       ORT_DYLIB_PATH: ${{ matrix.ort-dylib-path }}
+      DYLD_LIBRARY_PATH: ${{ matrix.ort-dylib-path != '' && '/usr/local/lib' || '' }}
 
     strategy:
       fail-fast: false
