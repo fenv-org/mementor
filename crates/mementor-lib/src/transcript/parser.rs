@@ -92,13 +92,12 @@ pub fn parse_transcript(path: &Path, start_line: usize) -> anyhow::Result<ParseR
 
         // Detect pr-link entries (no message field)
         if entry.entry_type.as_deref() == Some("pr-link") {
-            if let (Some(sid), Some(pr_number), Some(pr_url), Some(pr_repo), Some(ts)) = (
-                entry.session_id.as_ref(),
-                entry.pr_number,
-                entry.pr_url.as_ref(),
-                entry.pr_repository.as_ref(),
-                entry.timestamp.as_ref(),
-            ) {
+            if let Some(sid) = entry.session_id.as_ref()
+                && let Some(pr_number) = entry.pr_number
+                && let Some(pr_url) = entry.pr_url.as_ref()
+                && let Some(pr_repo) = entry.pr_repository.as_ref()
+                && let Some(ts) = entry.timestamp.as_ref()
+            {
                 pr_links.push(PrLinkEntry {
                     line_index: line_idx,
                     session_id: sid.clone(),

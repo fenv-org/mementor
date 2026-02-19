@@ -48,10 +48,12 @@ pub fn group_into_turns(messages: &[ParsedMessage]) -> Vec<Turn> {
     for (idx, (_, user, assistant)) in pairs.iter().enumerate() {
         let mut text = format!("[User] {}\n\n[Assistant] {}", user.text, assistant.text);
 
-        // Append tool summary if the assistant used any tools
-        if let MessageRole::Assistant { tool_summary } = &assistant.role
-            && !tool_summary.is_empty()
-        {
+        let tool_summary = match &assistant.role {
+            MessageRole::Assistant { tool_summary } => tool_summary.clone(),
+            MessageRole::User => vec![],
+        };
+
+        if !tool_summary.is_empty() {
             write!(&mut text, "\n\n[Tools] {}", tool_summary.join(" | ")).unwrap();
         }
 
@@ -63,11 +65,6 @@ pub fn group_into_turns(messages: &[ParsedMessage]) -> Vec<Turn> {
             write!(&mut text, "\n\n[User] {}", next_user.text).unwrap();
             provisional = false;
         }
-
-        let tool_summary = match &assistant.role {
-            MessageRole::Assistant { tool_summary } => tool_summary.clone(),
-            MessageRole::User => vec![],
-        };
 
         turns.push(Turn {
             line_index: user.line_index,

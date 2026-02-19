@@ -85,3 +85,10 @@ Two valuable transcript signals remain unindexed after v2 Tasks 1-3:
 - [x] Move `make_entry`, `write_transcript`, `make_pr_link_entry` to
   `mementor-test-util::transcript` module to eliminate duplication between
   `ingest.rs` tests and `mementor-cli/test_util.rs`
+- [x] Code simplification pass:
+  - chunker.rs: extract `tool_summary` once instead of double pattern matching
+  - parser.rs: convert 5-tuple destructure to let-chains (edition 2024)
+  - ingest.rs: remove `header.clone()` via length comparison; also in
+    `search_context()` for consistency
+  - ingest.rs: simplify HashMap merge with `or_insert(f64::MAX)` + `.min()`
+  - types.rs: use `let-else` + `then_some` in `extract_tool_summary()`

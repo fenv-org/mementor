@@ -287,17 +287,12 @@ impl Content {
             Content::Blocks(blocks) => blocks
                 .iter()
                 .filter_map(|block| {
-                    if let ContentBlock::ToolUse { name, input, .. } = block {
-                        let name = name.as_deref()?;
-                        let summary = summarize_tool(name, input.as_ref());
-                        if summary.is_empty() {
-                            None
-                        } else {
-                            Some(summary)
-                        }
-                    } else {
-                        None
-                    }
+                    let ContentBlock::ToolUse { name, input, .. } = block else {
+                        return None;
+                    };
+                    let name = name.as_deref()?;
+                    let summary = summarize_tool(name, input.as_ref());
+                    (!summary.is_empty()).then_some(summary)
                 })
                 .collect(),
         }

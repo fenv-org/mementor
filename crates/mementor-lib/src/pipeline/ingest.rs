@@ -518,28 +518,15 @@ pub fn search_context(
     // Add vector results (best distance per turn)
     for result in &after_threshold {
         let key = (result.session_id.clone(), result.line_index);
-        merged
-            .entry(key)
-            .and_modify(|d| {
-                if result.distance < *d {
-                    *d = result.distance;
-                }
-            })
-            .or_insert(result.distance);
+        let d = merged.entry(key).or_insert(f64::MAX);
+        *d = d.min(result.distance);
     }
 
-    // Add file results
+    // Add file results (keep the lower distance if vector match already exists)
     for (sid, line_idx) in &file_results {
         let key = (sid.clone(), *line_idx);
-        merged
-            .entry(key)
-            .and_modify(|d| {
-                // Keep the lower distance (vector match is better than synthetic)
-                if FILE_MATCH_DISTANCE < *d {
-                    *d = FILE_MATCH_DISTANCE;
-                }
-            })
-            .or_insert(FILE_MATCH_DISTANCE);
+        let d = merged.entry(key).or_insert(f64::MAX);
+        *d = d.min(FILE_MATCH_DISTANCE);
     }
 
     debug!(merged_count = merged.len(), "Phase 6: merge results");
@@ -597,7 +584,7 @@ pub fn search_context(
         .unwrap();
     }
 
-    if ctx == "## Relevant past context\n\n" {
+    if ctx.len() == "## Relevant past context\n\n".len() {
         return Ok(String::new());
     }
 
@@ -635,7 +622,8 @@ pub fn search_file_context(
     let turn_texts = get_turns_chunks(conn, &turn_keys)?;
 
     let header = format!("## Past context for {normalized}\n\n");
-    let mut ctx = header.clone();
+    let header_len = header.len();
+    let mut ctx = header;
     for (i, (sid, line_idx)) in results.iter().enumerate() {
         let key = (sid.clone(), *line_idx);
         let full_text = turn_texts
@@ -649,7 +637,7 @@ pub fn search_file_context(
         write!(&mut ctx, "### Memory {}\n{}\n\n", i + 1, full_text).unwrap();
     }
 
-    if ctx == header {
+    if ctx.len() == header_len {
         return Ok(String::new());
     }
 
