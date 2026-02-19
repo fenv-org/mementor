@@ -113,9 +113,9 @@ Register both new hooks in `configure_hooks()`. Update existing enable tests.
 
 ## TODO
 
-- [ ] Step 8: get_recent_file_mentions query + tests
-- [ ] Step 9: search_file_context function + tests
-- [ ] Step 10: PreToolUse hook handler + tests
-- [ ] Step 11: SubagentStart hook handler + tests
-- [ ] Step 12: enable command update + tests
-- [ ] Verify: clippy + all tests pass
+- [x] Step 8: get_recent_file_mentions query + tests
+- [x] Step 9: search_file_context function + tests
+- [x] Step 10: PreToolUse hook handler + tests (6 tests)
+- [x] Step 11: SubagentStart hook handler + tests (4 tests)
+- [x] Step 12: enable command update + tests (all 12 enable tests updated)
+- [x] Verify: clippy + all tests pass (204 tests total)

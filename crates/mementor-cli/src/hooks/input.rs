@@ -69,6 +69,46 @@ pub fn read_pre_compact_input(reader: &mut dyn std::io::Read) -> anyhow::Result<
     Ok(input)
 }
 
+/// Input received from the Claude Code `PreToolUse` hook via stdin.
+#[derive(Debug, Deserialize)]
+pub struct PreToolUseInput {
+    /// The session ID of the Claude Code conversation.
+    pub session_id: String,
+    /// The name of the tool being invoked (e.g., "Read", "Edit", "Write").
+    pub tool_name: String,
+    /// The tool's input parameters (contains `file_path`, `notebook_path`, etc.).
+    pub tool_input: serde_json::Value,
+    /// The project working directory.
+    pub cwd: String,
+}
+
+/// Read and parse the `PreToolUse` hook input from stdin.
+pub fn read_pre_tool_use_input(reader: &mut dyn std::io::Read) -> anyhow::Result<PreToolUseInput> {
+    let mut buf = String::new();
+    reader.read_to_string(&mut buf)?;
+    let input: PreToolUseInput = serde_json::from_str(&buf)?;
+    Ok(input)
+}
+
+/// Input received from the Claude Code `SubagentStart` hook via stdin.
+#[derive(Debug, Deserialize)]
+pub struct SubagentStartInput {
+    /// The session ID of the Claude Code conversation.
+    pub session_id: String,
+    /// The project working directory.
+    pub cwd: String,
+}
+
+/// Read and parse the `SubagentStart` hook input from stdin.
+pub fn read_subagent_start_input(
+    reader: &mut dyn std::io::Read,
+) -> anyhow::Result<SubagentStartInput> {
+    let mut buf = String::new();
+    reader.read_to_string(&mut buf)?;
+    let input: SubagentStartInput = serde_json::from_str(&buf)?;
+    Ok(input)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -135,5 +175,31 @@ mod tests {
         let json = r#"{"session_id": "abc"}"#;
         let result = read_stop_input(&mut json.as_bytes());
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_pre_tool_use_input() {
+        let json = r#"{"session_id": "abc-123", "tool_name": "Read", "tool_input": {"file_path": "/tmp/main.rs"}, "cwd": "/home/user/project"}"#;
+        let input = read_pre_tool_use_input(&mut json.as_bytes()).unwrap();
+        assert_eq!(input.session_id, "abc-123");
+        assert_eq!(input.tool_name, "Read");
+        assert_eq!(input.tool_input["file_path"], "/tmp/main.rs");
+        assert_eq!(input.cwd, "/home/user/project");
+    }
+
+    #[test]
+    fn parse_pre_tool_use_input_no_file_path() {
+        let json = r#"{"session_id": "abc-123", "tool_name": "Bash", "tool_input": {"command": "ls"}, "cwd": "/tmp"}"#;
+        let input = read_pre_tool_use_input(&mut json.as_bytes()).unwrap();
+        assert_eq!(input.tool_name, "Bash");
+        assert!(input.tool_input.get("file_path").is_none());
+    }
+
+    #[test]
+    fn parse_subagent_start_input() {
+        let json = r#"{"session_id": "abc-123", "cwd": "/home/user/project"}"#;
+        let input = read_subagent_start_input(&mut json.as_bytes()).unwrap();
+        assert_eq!(input.session_id, "abc-123");
+        assert_eq!(input.cwd, "/home/user/project");
     }
 }

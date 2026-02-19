@@ -102,4 +102,4 @@ constant. Merge vector + file results via HashMap dedup.
 - [x] Step 5: ingest pipeline extension (cascade delete + file mention insert)
 - [x] Step 6: file hint extraction + tests
 - [x] Step 7: hybrid search in search_context() + search_file_context() + tests
-- [ ] Verify: clippy + all tests pass
+- [x] Verify: clippy + all tests pass (204 tests total)
