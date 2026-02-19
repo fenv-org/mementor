@@ -4,7 +4,7 @@ use crate::config::MIN_QUERY_UNITS;
 ///
 /// Used to decide whether to perform embedding + vector search (`Searchable`)
 /// or skip recall entirely (`Trivial`).
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum QueryClass {
     /// The prompt carries enough semantic content for useful recall.
     Searchable,

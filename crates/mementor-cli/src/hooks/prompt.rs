@@ -30,14 +30,6 @@ where
         "Hook received"
     );
 
-    if input.prompt.is_empty() {
-        debug!(
-            hook = "UserPromptSubmit",
-            "prompt is empty, skipping recall"
-        );
-        return Ok(());
-    }
-
     if let QueryClass::Trivial { reason } = classify_query(&input.prompt) {
         debug!(
             hook = "UserPromptSubmit",

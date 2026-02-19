@@ -47,3 +47,9 @@ inputs. Two rules:
 - New test count: 18 new tests (13 unit in `pipeline/query.rs` +
   2 integration in `hooks/prompt.rs` + 3 integration in `commands/query.rs`)
 - Fixed 1 existing test (`try_run_query_with_results`: "Hello world" → "Implementing authentication in Rust")
+
+## Post-Implementation Simplification
+
+- Added `Eq` derive to `QueryClass` (clippy pedantic `derive_partial_eq_without_eq`)
+- Removed redundant `is_empty()` check in `handle_prompt()` — subsumed by
+  `classify_query("")` returning `Trivial("too short")`
