@@ -80,9 +80,9 @@ Zero-cost O(1) classification -- no embedding or DB access for skipped prompts.
 ### R2: Query Enrichment
 
 Augment non-trivial prompts with session file/URL context before embedding.
-After v2 Task 3, the `file_mentions` table records which files were touched
-in the current session. Appending recently-touched filenames transforms vague
-queries into contextually grounded ones.
+The `file_mentions` table (PR #28) records which files were touched in the
+current session. Appending recently-touched filenames transforms vague queries
+into contextually grounded ones.
 
 Example:
 ```
@@ -126,7 +126,8 @@ pipeline alongside main transcript accesses.
 ## Architecture Overview
 
 All changes extend the existing incremental ingest pipeline (`run_ingest`)
-and search pipeline (`search_context`). No new hooks are needed.
+and search pipeline (`search_context`). PR #28 added `PreToolUse` and
+`SubagentStart` hooks that provide additional integration points.
 
 ```
 Transcript JSONL (main + subagents)
@@ -137,19 +138,23 @@ parse_transcript() -> Vec<ParsedMessage>
   |
 group_into_turns() -> Vec<Turn>
   |-- [R3] Turn has full_text, tool_summary, agent_id, is_sidechain
+  |       (Turn.tool_summary already exists from PR #28)
   |
 run_ingest()
   |-- [R3] Insert into turns table, then chunk -> embed -> insert chunks
   |-- [R5] Process subagent transcripts after main transcript
-  |-- [R4] Extract resources from tool_summary -> embed -> cache
+  |-- [R4] Reuse extract_file_paths() + file_mentions for resource data
   |-- [R4] Compute/update session centroids (full, recent_5, recent_10)
   |
-search_context() -- enhanced pipeline
+handle_prompt() -- query preprocessing
   |-- [R1] classify_query() -> skip trivial prompts
   |-- [R2] enrich_query() -> augment with file/URL context
+  |
+search_context() -- 8-phase pipeline (PR #28 baseline)
   |-- [existing] Vector text search (embed -> vector_full_scan on chunks)
+  |-- [existing] File path hybrid search (extract_file_hints -> search_by_file_path)
   |-- [R4] Access pattern search (centroid -> vector_full_scan on session_access_patterns)
-  |-- [R4] Merge text + centroid results
+  |-- [R4] Merge text + file + centroid results
   |-- [R3] Use turns.full_text directly (no reconstruction)
   +-- Format output
 ```
@@ -161,8 +166,8 @@ search_context() -- enhanced pipeline
 | 1 | [query-classification](2026-02-19_query-classification.md) | pipeline/query.rs + config + hooks | -- |
 | 2 | [schema-redesign](2026-02-19_schema-redesign.md) | db/schema + queries + ingest + chunker | -- |
 | 3 | [subagent-indexing](2026-02-19_subagent-indexing.md) | pipeline/ingest + db/schema | Task 2 |
-| 4 | [access-pattern-centroids](2026-02-19_access-pattern-centroids.md) | db/schema + queries + ingest + config | Task 2 + v2 Task 3 |
-| 5 | [query-enrichment](2026-02-19_query-enrichment.md) | pipeline/query + queries + hooks | v2 Task 3 |
+| 4 | [access-pattern-centroids](2026-02-19_access-pattern-centroids.md) | db/schema + queries + ingest + config | Task 2 |
+| 5 | [query-enrichment](2026-02-19_query-enrichment.md) | pipeline/query + queries + hooks | -- |
 
 **Dependency chain:**
 
@@ -170,16 +175,19 @@ search_context() -- enhanced pipeline
 Task 1 (classification) ────────→ independent
 
 Task 2 (schema redesign) ──┬───→ Task 3 (subagent indexing)
-                            └───→ Task 4 (centroids) ←── v2 Task 3
+                            └───→ Task 4 (centroids)
 
-v2 Task 3 (file_mentions) ─┬───→ Task 4 (centroids)
-                            └───→ Task 5 (enrichment)
+Task 5 (enrichment) ───────────→ independent
 ```
+
+Note: v2 Task 3 (`file_mentions` table) was merged in PR #28. Dependencies
+on it are now resolved.
 
 ## Design Constraints
 
-- **No new hooks**: All data comes from existing transcript JSONL, processed
-  during Stop/PreCompact hooks (already in place).
+- **Existing hooks sufficient**: PR #28 added `PreToolUse` and `SubagentStart`
+  hooks. V3 tasks use existing Stop/PreCompact hooks for ingest and
+  `UserPromptSubmit` for query preprocessing. No new hooks needed.
 - **Crash resilient**: Same incremental `last_line_index` pattern. No
   dependency on `SessionEnd` (which may never fire).
 - **Backward compatible**: DB is regeneratable from transcripts. Migration
@@ -193,8 +201,12 @@ v2 Task 3 (file_mentions) ─┬───→ Task 4 (centroids)
 ## Previous Work
 
 - [recall-quality-v2](2026-02-18_recall-quality-v2.md) -- indexing/storage
-  side (Tasks 1 and 2 done, Tasks 3 and 4 pending)
+  side (Tasks 1-3 done, Task 4 pending)
 - [improve-recall-quality](2026-02-18_improve-recall-quality.md) -- 5-phase
-  post-search filter pipeline
-- [file-aware-hybrid-recall](2026-02-18_file-aware-hybrid-recall.md) -- v2
-  Task 3 (not done, prerequisite for Tasks 4 and 5)
+  post-search filter pipeline (now 8-phase after PR #28)
+- [file-aware-hybrid-search](2026-02-19_file-aware-hybrid-search.md) -- v2
+  Task 3 (PR #28, merged). Adds `file_mentions` table, `extract_file_paths()`,
+  `normalize_path()`, `extract_at_mentions()`, hybrid 8-phase search pipeline,
+  `search_file_context()`, PreToolUse and SubagentStart hooks.
+- [hook-based-file-context](2026-02-19_hook-based-file-context.md) -- v2
+  Task 5 (PR #28, merged). PreToolUse and SubagentStart hook handlers.

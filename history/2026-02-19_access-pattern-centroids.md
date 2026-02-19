@@ -1,10 +1,9 @@
 # Task 4: Access Pattern Centroid Search
 
 - **Parent:** [recall-quality-v3](2026-02-19_recall-quality-v3.md) — R4
-- **Depends on:** [Task 2: schema-redesign](2026-02-19_schema-redesign.md),
-  [v2 Task 3: file-aware-hybrid-recall](2026-02-18_file-aware-hybrid-recall.md)
-  (for `file_mentions` table)
+- **Depends on:** [Task 2: schema-redesign](2026-02-19_schema-redesign.md)
 - **Required by:** none
+- **Prerequisite resolved:** `file_mentions` table exists (PR #28)
 
 ## Background
 
@@ -57,9 +56,9 @@ Accumulative centroid evolution: smoothly drifts as file access patterns change.
 
 ## Design Decisions
 
-### Schema (migration v4)
+### Schema (part of Task 2 clean rebuild or separate migration)
 
-Built on top of v2 Task 3's migration v3:
+Added alongside the schema redesign:
 
 ```sql
 -- Cached embeddings for file paths and URLs (deduped across sessions)
@@ -88,13 +87,18 @@ vector_init('session_access_patterns', 'centroid', 'type=f32, dimension=384, dis
 
 ### Resource extraction from tool_summary
 
-- **File tools:** parse `Read(path)`, `Edit(path)`, `Write(path)`,
-  `NotebookEdit(path, ...)` -> extract file path (bare, unquoted in
-  parentheses)
-- **URL tools:** parse `WebFetch(url="https://...")` -> extract URL (quoted)
-- **Search tools:** `Grep(pattern="...", path="...")` -> extract path if
-  present (quoted)
-- **Other tools:** no resource extraction
+Reuse `extract_file_paths()` from PR #28 for file path extraction (already
+handles Read, Edit, Write, NotebookEdit, Grep, Bash tools). Additionally:
+
+- **URL tools:** parse `WebFetch(url="https://...")` -> extract URL (quoted).
+  This is NOT yet implemented — PR #28's `extract_file_paths()` skips unknown
+  tools. Add URL extraction as an extension.
+- **`@` mentions:** Already captured by `extract_at_mentions()` (PR #28) and
+  stored in `file_mentions` with `tool_name = "mention"`.
+
+The `file_mentions` table (PR #28) already stores extracted file paths per
+turn. For centroid computation, query `file_mentions` directly instead of
+re-parsing tool summaries.
 
 ### Centroid computation
 
@@ -128,7 +132,10 @@ out. Recomputation is still cheap -- at most 10 turns worth of resources.
 
 ### Search integration (in `search_context()`)
 
-1. After text search produces deduped results, run access pattern search.
+The search pipeline is now 8 phases (PR #28). Centroid search inserts after
+the existing file path search:
+
+1. After text + file search produces deduped results, run access pattern search.
 2. Compute current session's centroid:
    - Query `file_mentions` for current session.
    - Look up embeddings from `resource_embeddings`.
@@ -163,7 +170,7 @@ pub const RECENT_TURN_WINDOWS: &[(&str, usize)] = &[("recent_5", 5), ("recent_10
 
 | File | Change |
 |------|--------|
-| `crates/mementor-lib/src/db/schema.rs` | v4 migration: `resource_embeddings` + `session_access_patterns` |
+| `crates/mementor-lib/src/db/schema.rs` | Add `resource_embeddings` + `session_access_patterns` to schema redesign |
 | `crates/mementor-lib/src/db/connection.rs` | `vector_init` for `session_access_patterns` |
 | `crates/mementor-lib/src/db/queries.rs` | `get_or_insert_resource_embedding()`, `upsert_session_centroid()`, `search_session_centroids()`, `get_session_resources()` |
 | `crates/mementor-lib/src/pipeline/ingest.rs` | Resource extraction, embedding cache, centroid computation |
@@ -171,20 +178,19 @@ pub const RECENT_TURN_WINDOWS: &[(&str, usize)] = &[("recent_5", 5), ("recent_10
 
 ## TODO
 
-- [ ] Add v4 migration for `resource_embeddings` and `session_access_patterns`
+- [ ] Add `resource_embeddings` and `session_access_patterns` to schema (Task 2 rebuild or separate migration)
 - [ ] Register `session_access_patterns` with `vector_init` in `connection.rs`
-- [ ] Implement `extract_resources_from_summary()` -- parse file paths and URLs from tool_summary strings
+- [ ] Extend `extract_file_paths()` (or add companion) for URL extraction from WebFetch/WebSearch tool summaries
 - [ ] Implement `get_or_insert_resource_embedding()` -- check cache, embed if missing, insert
 - [ ] Implement `compute_centroid()` -- component-wise mean of f32 vectors
 - [ ] Implement `upsert_session_centroid()` -- incremental running mean for 'full', direct write for windowed
 - [ ] Implement `compute_windowed_centroid()` -- recompute from file_mentions for 'recent_5', 'recent_10'
 - [ ] Implement `search_session_centroids()` -- `vector_full_scan` on `session_access_patterns`
-- [ ] Implement `get_session_resources()` -- query file_mentions for a session's resources
+- [ ] Reuse `get_recent_file_mentions()` (PR #28) or extend for centroid resource queries
 - [ ] Integrate centroid computation into `run_ingest()` after turn processing
 - [ ] Integrate centroid search into `search_context()` (after text search, before format)
 - [ ] Add config constants
-- [ ] Add test: `extract_resources_from_file_tools`
-- [ ] Add test: `extract_resources_from_url_tools`
+- [ ] Add test: `extract_url_resources_from_webfetch`
 - [ ] Add test: `resource_embedding_cache_deduplicates`
 - [ ] Add test: `session_centroid_computed_correctly`
 - [ ] Add test: `incremental_centroid_update`
@@ -192,7 +198,7 @@ pub const RECENT_TURN_WINDOWS: &[(&str, usize)] = &[("recent_5", 5), ("recent_10
 - [ ] Add test: `search_session_centroids_finds_similar`
 - [ ] Add test: `centroid_search_merged_with_text_results`
 - [ ] Add test: `no_resources_skips_centroid_search`
-- [ ] Add migration tests (v3->v4)
+- [ ] Add migration/schema tests for new tables
 - [ ] Verify: clippy + all tests pass
 
 ## Estimated Scope

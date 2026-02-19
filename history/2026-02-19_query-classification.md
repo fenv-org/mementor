@@ -44,7 +44,8 @@ Applied in order:
 ### Integration
 
 - **`handle_prompt()` in `hooks/prompt.rs`:** After empty check, before
-  `search_context`. On `Trivial` -> debug log + return (no recall).
+  `search_context` (which is now an 8-phase pipeline after PR #28). On
+  `Trivial` -> debug log + return (no recall).
 - **`run_query()` in `commands/query.rs`:** On `Trivial` -> print user-facing
   message explaining why recall was skipped.
 

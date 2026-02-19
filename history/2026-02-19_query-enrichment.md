@@ -1,18 +1,20 @@
 # Task 5: Query Enrichment
 
 - **Parent:** [recall-quality-v3](2026-02-19_recall-quality-v3.md) — R2
-- **Depends on:**
-  [v2 Task 3: file-aware-hybrid-recall](2026-02-18_file-aware-hybrid-recall.md)
-  (for `file_mentions` table)
+- **Depends on:** none (prerequisite `file_mentions` resolved by PR #28)
 - **Required by:** none
 
 ## Background
 
 Even reasonable queries like "why was this file changed?" lack specificity. The
 user is currently working on certain files in their session, but the query text
-alone doesn't mention them. After v2 Task 3, the `file_mentions` table records
-which files and URLs were touched in the current session. Appending these to the
-query before embedding biases similarity toward relevant past turns.
+alone doesn't mention them. The `file_mentions` table (PR #28) records which
+files were touched in the current session. Appending recently-touched filenames
+to the query before embedding biases similarity toward relevant past turns.
+
+Note: PR #28's `file_mentions` table stores file paths but does NOT currently
+store URLs (WebFetch/WebSearch tool summaries are skipped). URL enrichment
+requires extending `extract_file_paths()` first (see Task 4).
 
 ## Goals
 
@@ -36,33 +38,36 @@ pub fn enrich_query(
 
 1. Skip if `session_id` is `None` (handles `mementor query` CLI -- no session
    context).
-2. Query `file_mentions` for the current session's recently-touched files:
+2. Query `file_mentions` for the current session's recently-touched files.
+   Reuse `get_recent_file_mentions()` from PR #28:
    ```sql
-   SELECT DISTINCT file_path FROM file_mentions
-   WHERE session_id = ?1 AND resource_type = 'file'
-   ORDER BY line_index DESC LIMIT ?2
+   SELECT file_path, MAX(line_index) as max_line
+   FROM file_mentions
+   WHERE session_id = ?1
+   GROUP BY file_path
+   ORDER BY max_line DESC
+   LIMIT ?2
    ```
-3. Query for recently-accessed URLs:
-   ```sql
-   SELECT DISTINCT file_path FROM file_mentions
-   WHERE session_id = ?1 AND resource_type = 'url'
-   ORDER BY line_index DESC LIMIT ?3
-   ```
-   Note: `file_path` column stores both file paths and URLs (the column name
-   is historical from v2 Task 3).
-4. Extract filename component only from file paths (not full path) to avoid
-   machine-specific noise:
+   Note: The actual schema has columns `(session_id, line_index, file_path,
+   tool_name)`. There is no `resource_type` column. File paths are already
+   stored as relative paths (normalized by `normalize_path()` in PR #28).
+3. Extract filename component only (not full relative path) to avoid noise:
    ```rust
    Path::new(file_path).file_name().map(|f| f.to_string_lossy())
    ```
-5. URLs are kept as-is (no extraction needed).
-6. Append context:
+4. Append context:
    ```
-   {query}\n\n[Context: recently touched files: foo.rs, bar.rs | URLs: https://docs.rs/serde]
+   {query}\n\n[Context: recently touched files: foo.rs, bar.rs]
    ```
-7. If no files AND no URLs found, return query unchanged.
-8. Graceful degradation: if `file_mentions` table doesn't exist (v2 Task 3 not
-   deployed), catch the SQL error and return query unchanged.
+5. If no files found, return query unchanged.
+6. URL enrichment: deferred until URL extraction is added to
+   `extract_file_paths()` (see Task 4). When available, append URLs to the
+   context string separated by ` | URLs: ...`.
+
+Note: enrichment runs in `handle_prompt()` before `search_context()`. The
+8-phase pipeline (PR #28) has its own `extract_file_hints()` in Phase 2, which
+operates on the enriched query text. Ordering: classify -> enrich ->
+search_context.
 
 ### Integration
 
@@ -83,27 +88,20 @@ pub const MAX_ENRICHMENT_URLS: usize = 5;
 | File | Change |
 |------|--------|
 | `crates/mementor-lib/src/pipeline/query.rs` | `enrich_query()` function |
-| `crates/mementor-lib/src/db/queries.rs` | `get_session_file_paths()`, `get_session_urls()` |
-| `crates/mementor-lib/src/config.rs` | `MAX_ENRICHMENT_FILES`, `MAX_ENRICHMENT_URLS` |
+| `crates/mementor-lib/src/db/queries.rs` | Reuse `get_recent_file_mentions()` (PR #28) |
+| `crates/mementor-lib/src/config.rs` | `MAX_ENRICHMENT_FILES` |
 | `crates/mementor-cli/src/hooks/prompt.rs` | Enrichment integration |
 
 ## TODO
 
-- [ ] Add `MAX_ENRICHMENT_FILES` and `MAX_ENRICHMENT_URLS` constants to `config.rs`
-- [ ] Implement `get_session_file_paths()` in `queries.rs`
-- [ ] Implement `get_session_urls()` in `queries.rs`
-- [ ] Implement `enrich_query()` in `query.rs`
-- [ ] Integrate into `handle_prompt` in `prompt.rs`
+- [ ] Add `MAX_ENRICHMENT_FILES` constant to `config.rs`
+- [ ] Implement `enrich_query()` in `query.rs` (reuse `get_recent_file_mentions()` from PR #28)
+- [ ] Integrate into `handle_prompt` in `prompt.rs` (after classification, before `search_context`)
 - [ ] Add test: `enrich_query_with_files`
-- [ ] Add test: `enrich_query_with_urls`
-- [ ] Add test: `enrich_query_with_files_and_urls`
 - [ ] Add test: `enrich_query_no_files`
 - [ ] Add test: `enrich_query_no_session`
 - [ ] Add test: `enrich_query_extracts_filenames`
 - [ ] Add test: `enrich_query_caps_at_max`
-- [ ] Add test: `get_session_file_paths_returns_distinct`
-- [ ] Add test: `get_session_file_paths_ordered_by_recency`
-- [ ] Add test: `graceful_degradation_no_table`
 - [ ] Add test (CLI): `try_run_hook_prompt_enriched_search`
 - [ ] Verify: clippy + all tests pass
 

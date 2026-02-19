@@ -19,6 +19,11 @@ Currently, mementor only processes the main transcript file. Subagent activity
 — which often contains the most substantive file-level work (code exploration,
 research, analysis) — is completely invisible to recall.
 
+Note: PR #28 added a `SubagentStart` hook that injects recent file mentions
+into subagent context at launch time. That hook provides real-time context
+injection but does NOT parse subagent transcripts for indexing. This task adds
+the transcript indexing side.
+
 Key facts about subagent transcripts:
 
 - Location:
@@ -81,7 +86,12 @@ as Task 2.
    c. Group into turns with `group_into_turns()`.
    d. For each turn: set `agent_id` and `is_sidechain=true`.
    e. Chunk -> embed -> insert (same pipeline as main turns).
-   f. Update `subagent_sessions` record.
+   f. Extract file mentions using `extract_file_paths()` and
+      `extract_at_mentions()` (reuse from PR #28).
+   g. Update `subagent_sessions` record.
+
+Note: `run_ingest()` already takes `project_dir` and `project_root` parameters
+(PR #28) needed for path normalization in subagent processing.
 
 ### Turn creation for subagent turns
 
