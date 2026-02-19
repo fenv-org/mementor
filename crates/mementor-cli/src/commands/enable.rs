@@ -726,43 +726,24 @@ mod tests {
 
     #[test]
     fn try_run_enable_rejects_linked_worktree() {
-        use std::process::Command;
+        use mementor_test_util::git::{init_git_repo, run_git};
 
         let tmp = tempfile::tempdir().unwrap();
         let main_dir = tmp.path().join("main");
         std::fs::create_dir_all(&main_dir).unwrap();
 
         // Create a real git repo + linked worktree.
-        for (dir, args) in [
-            (main_dir.as_path(), vec!["init"]),
-            (main_dir.as_path(), vec!["config", "user.email", "t@t.com"]),
-            (main_dir.as_path(), vec!["config", "user.name", "Test"]),
-            (
-                main_dir.as_path(),
-                vec!["commit", "--allow-empty", "-m", "init"],
-            ),
-            (
-                main_dir.as_path(),
-                vec![
-                    "worktree",
-                    "add",
-                    tmp.path().join("wt").to_str().unwrap(),
-                    "-b",
-                    "test-wt",
-                ],
-            ),
-        ] {
-            let out = Command::new("git")
-                .args(&args)
-                .current_dir(dir)
-                .output()
-                .unwrap();
-            assert!(
-                out.status.success(),
-                "{}",
-                String::from_utf8_lossy(&out.stderr)
-            );
-        }
+        init_git_repo(&main_dir);
+        run_git(
+            &main_dir,
+            &[
+                "worktree",
+                "add",
+                tmp.path().join("wt").to_str().unwrap(),
+                "-b",
+                "test-wt",
+            ],
+        );
 
         let wt_dir = tmp.path().join("wt");
         let ctx = mementor_lib::context::MementorContext::with_cwd_and_log_dir(

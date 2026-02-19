@@ -85,12 +85,15 @@ WAL mode + `busy_timeout` ensures safe concurrent access.
 - [x] Fix enable guard tests to follow testing guidelines: full output
   matching (`assert_eq!`), stdout/stderr verification, real git repo setup
   kept for linked worktree test
+- [x] Enforce testing guidelines reference in CLAUDE.md
+- [x] Extract shared `mementor-test-util` crate with `init_git_repo`,
+  `run_git`, `assert_paths_eq` — used by both `mementor-lib` and `mementor-cli`
 
 ## Results
 
-- 7 files modified/created
-- 134 tests passing (was 77 before; +9 git tests, +2 connection tests,
-  +3 context tests, +3 enable guard tests)
+- 10+ files modified/created
+- 137 tests passing (was 77 before; +9 git tests, +2 connection tests,
+  +3 context tests, +3 enable guard tests, +3 test-util self-tests)
 - Clippy clean with `-D warnings`
 
 ## Future Work

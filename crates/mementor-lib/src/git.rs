@@ -110,51 +110,9 @@ fn try_resolve_linked_worktree(dir: &Path, git_file: &Path) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use std::process::Command;
+    use mementor_test_util::git::{assert_paths_eq, init_git_repo, run_git};
 
     use super::*;
-
-    // ---------------------------------------------------------------
-    // Helpers
-    // ---------------------------------------------------------------
-
-    /// Create a minimal git repository in `dir` with one empty commit.
-    fn init_git_repo(dir: &Path) {
-        run_git(dir, &["init"]);
-        run_git(dir, &["config", "user.email", "test@test.com"]);
-        run_git(dir, &["config", "user.name", "Test"]);
-        run_git(dir, &["commit", "--allow-empty", "-m", "initial"]);
-    }
-
-    fn run_git(dir: &Path, args: &[&str]) {
-        let output = Command::new("git")
-            .args(&["-c", "protocol.file.allow=always"])
-            .args(args)
-            .current_dir(dir)
-            .output()
-            .expect("git command failed to start");
-        assert!(
-            output.status.success(),
-            "git {} failed in {}: {}",
-            args.join(" "),
-            dir.display(),
-            String::from_utf8_lossy(&output.stderr),
-        );
-    }
-
-    /// Canonicalize both paths before comparing (handles macOS /private/var
-    /// vs /var symlinks).
-    fn assert_paths_eq(actual: &Path, expected: &Path) {
-        let actual = std::fs::canonicalize(actual)
-            .unwrap_or_else(|_| panic!("cannot canonicalize {}", actual.display()));
-        let expected = std::fs::canonicalize(expected)
-            .unwrap_or_else(|_| panic!("cannot canonicalize {}", expected.display()));
-        assert_eq!(actual, expected);
-    }
-
-    // ---------------------------------------------------------------
-    // resolve_worktree
-    // ---------------------------------------------------------------
 
     #[test]
     fn resolve_worktree_primary_at_root() {
