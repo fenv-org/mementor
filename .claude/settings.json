@@ -33,6 +33,27 @@
           }
         ]
       }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Read|Edit|Write|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "mementor hook pre-tool-use"
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "mementor hook subagent-start"
+          }
+        ]
+      }
     ]
   },
   "permissions": {
@@ -41,13 +62,11 @@
       "WebSearch",
       "Skill(commit)",
       "Skill(worktree)",
-
       "Bash(cargo *)",
       "Bash(rustc --print *)",
       "Bash(mise *)",
       "Bash(./scripts/update-sqlite-vector.sh *)",
       "Bash(./target/release/mementor enable *)",
-
       "Bash(git add *)",
       "Bash(git branch *)",
       "Bash(git checkout *)",
@@ -56,7 +75,6 @@
       "Bash(git ls-remote *)",
       "Bash(git pull *)",
       "Bash(git worktree *)",
-
       "Bash(gh auth *)",
       "Bash(gh issue view *)",
       "Bash(gh pr checks *)",
@@ -66,7 +84,6 @@
       "Bash(gh run list *)",
       "Bash(gh run view *)",
       "Bash(gh run watch *)",
-
       "Bash(brew install *)",
       "Bash(chmod *)",
       "Bash(cp *)",
