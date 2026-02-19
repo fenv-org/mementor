@@ -30,6 +30,15 @@ paths from the project root** for cross-worktree consistency:
 - `normalize_path(path, project_dir, project_root)` tries both the current
   worktree CWD and the primary worktree root for stripping
 
+### `@` mention extraction (added)
+
+Users reference files with `@/path/to/file` syntax in prompts. These `@`
+mentions are extracted from the turn text via `extract_at_mentions()` and
+stored in `file_mentions` with `tool_name = "mention"`. Paths are normalized
+identically to tool-sourced file paths. The existing `INSERT OR IGNORE` on
+the UNIQUE constraint prevents duplicates when a tool also accesses the same
+file mentioned by the user.
+
 ### Bash file path extraction (added)
 
 The original design only handled Read/Edit/Write tools. Now also parses:
@@ -102,9 +111,11 @@ constant. Merge vector + file results via HashMap dedup.
 - [x] Step 5: ingest pipeline extension (cascade delete + file mention insert)
 - [x] Step 6: file hint extraction + tests
 - [x] Step 7: hybrid search in search_context() + search_file_context() + tests
+- [x] Step 8: `@` mention extraction from user text + tests
 - [x] Verify: clippy + all tests pass (204 tests total)
 
 ## Commits
 
 - `3520d11` — add file-aware hybrid search with path normalization (Steps 1–7)
 - `e2ffbbb` — simplify hook handlers and deduplicate helpers (post-review cleanup)
+- (pending) — capture `@`-mentioned file paths from user prompts

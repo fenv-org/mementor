@@ -152,6 +152,30 @@ fn extract_path_like_tokens(cmd: &str) -> Vec<&str> {
         .collect()
 }
 
+/// Extract `@`-mentioned file paths from turn text.
+///
+/// Users reference files with `@/absolute/path` syntax in prompts. This
+/// function finds those mentions and normalizes them.
+fn extract_at_mentions(turn_text: &str, project_dir: &str, project_root: &str) -> Vec<String> {
+    let mut result = Vec::new();
+    for token in turn_text.split_whitespace() {
+        if let Some(path) = token.strip_prefix('@') {
+            // Strip trailing punctuation that might cling to the mention
+            let path = path.trim_end_matches(|c: char| {
+                c == ',' || c == ';' || c == ':' || c == ')' || c == '?' || c == '!'
+            });
+            if path.is_empty() {
+                continue;
+            }
+            if let Some(normalized) = normalize_path(path, project_dir, project_root) {
+                result.push(normalized.into_owned());
+            }
+        }
+    }
+    result.dedup();
+    result
+}
+
 /// Extract file path hints from a query string for hybrid search.
 ///
 /// Identifies tokens that look like file paths or file names based on
@@ -308,11 +332,20 @@ pub fn run_ingest(
         for (file_path, tool_name) in &file_paths {
             insert_file_mention(conn, session_id, turn.line_index, file_path, tool_name)?;
         }
-        if !file_paths.is_empty() {
+
+        // Extract and store @-mentioned file paths from user text
+        let at_mentions = extract_at_mentions(&turn.text, project_dir, project_root);
+        for file_path in &at_mentions {
+            insert_file_mention(conn, session_id, turn.line_index, file_path, "mention")?;
+        }
+
+        let total_files = file_paths.len() + at_mentions.len();
+        if total_files > 0 {
             debug!(
                 session_id = %session_id,
                 line_index = turn.line_index,
-                file_count = file_paths.len(),
+                tool_files = file_paths.len(),
+                at_mentions = at_mentions.len(),
                 "Stored file mentions"
             );
         }
@@ -1124,6 +1157,78 @@ mod tests {
         let result =
             extract_file_paths(&summaries, "/Users/x/mementor-feature", "/Users/x/mementor");
         assert_eq!(result, vec![("src/main.rs".to_string(), "Read"),]);
+    }
+
+    // --- extract_at_mentions tests ---
+
+    #[test]
+    fn extract_at_mentions_absolute_path() {
+        let result = extract_at_mentions(
+            "[User] check @/Users/x/mementor/src/main.rs please",
+            "/Users/x/mementor",
+            "/Users/x/mementor",
+        );
+        assert_eq!(result, vec!["src/main.rs"]);
+    }
+
+    #[test]
+    fn extract_at_mentions_worktree_normalization() {
+        let result = extract_at_mentions(
+            "[User] look at @/Users/x/mementor-feature/src/lib.rs",
+            "/Users/x/mementor-feature",
+            "/Users/x/mementor",
+        );
+        assert_eq!(result, vec!["src/lib.rs"]);
+    }
+
+    #[test]
+    fn extract_at_mentions_multiple() {
+        let result = extract_at_mentions(
+            "[User] compare @/Users/x/mementor/src/a.rs and @/Users/x/mementor/src/b.rs",
+            "/Users/x/mementor",
+            "/Users/x/mementor",
+        );
+        assert_eq!(result, vec!["src/a.rs", "src/b.rs"]);
+    }
+
+    #[test]
+    fn extract_at_mentions_trailing_punctuation() {
+        let result = extract_at_mentions(
+            "[User] what about @/Users/x/mementor/src/main.rs?",
+            "/Users/x/mementor",
+            "/Users/x/mementor",
+        );
+        assert_eq!(result, vec!["src/main.rs"]);
+    }
+
+    #[test]
+    fn extract_at_mentions_external_path_discarded() {
+        let result = extract_at_mentions(
+            "[User] check @/tmp/random/file.txt",
+            "/Users/x/mementor",
+            "/Users/x/mementor",
+        );
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn extract_at_mentions_no_mentions() {
+        let result = extract_at_mentions(
+            "[User] just a normal question",
+            "/Users/x/mementor",
+            "/Users/x/mementor",
+        );
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn extract_at_mentions_bare_at_sign_ignored() {
+        let result = extract_at_mentions(
+            "[User] send email @ someone",
+            "/Users/x/mementor",
+            "/Users/x/mementor",
+        );
+        assert!(result.is_empty());
     }
 
     // --- extract_file_hints tests ---
