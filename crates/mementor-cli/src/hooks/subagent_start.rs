@@ -67,8 +67,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use mementor_lib::db::queries::Session;
-    use mementor_lib::db::queries::{insert_file_mention, upsert_session};
+    use mementor_lib::db::queries::{Session, insert_file_mention, upsert_session};
     use mementor_lib::output::BufferedIO;
 
     use crate::test_util::{runtime_in_memory, runtime_not_enabled};

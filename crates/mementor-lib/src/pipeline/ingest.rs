@@ -135,6 +135,12 @@ fn extract_quoted_value<'a>(args: &'a str, key: &str) -> Option<&'a str> {
     None
 }
 
+/// Returns `true` if a token looks like a file path or file name.
+fn looks_like_path(token: &str) -> bool {
+    !token.is_empty()
+        && (token.contains('/') || FILE_EXTENSIONS.iter().any(|ext| token.ends_with(ext)))
+}
+
 /// Extract path-like tokens from a command string.
 ///
 /// Tokens are considered path-like if they contain `/` or end with a known
@@ -142,9 +148,7 @@ fn extract_quoted_value<'a>(args: &'a str, key: &str) -> Option<&'a str> {
 fn extract_path_like_tokens(cmd: &str) -> Vec<&str> {
     cmd.split_whitespace()
         .map(|t| t.trim_matches(|c: char| c == '\'' || c == '"' || c == '`'))
-        .filter(|t| {
-            !t.is_empty() && (t.contains('/') || FILE_EXTENSIONS.iter().any(|ext| t.ends_with(ext)))
-        })
+        .filter(|t| looks_like_path(t))
         .collect()
 }
 
@@ -160,9 +164,7 @@ pub fn extract_file_hints(query: &str) -> Vec<&str> {
                 c == '`' || c == '\'' || c == '"' || c == '?' || c == ',' || c == ';' || c == ':'
             })
         })
-        .filter(|t| {
-            !t.is_empty() && (t.contains('/') || FILE_EXTENSIONS.iter().any(|ext| t.ends_with(ext)))
-        })
+        .filter(|t| looks_like_path(t))
         .collect();
     hints.dedup();
     hints
@@ -354,6 +356,18 @@ pub fn run_ingest(
     Ok(())
 }
 
+/// Look up the compaction boundary for a session.
+fn compact_boundary_for(
+    conn: &Connection,
+    session_id: Option<&str>,
+) -> anyhow::Result<Option<usize>> {
+    Ok(session_id
+        .map(|sid| queries::get_session(conn, sid))
+        .transpose()?
+        .flatten()
+        .and_then(|s| s.last_compact_line_index))
+}
+
 /// Search memories across all sessions for the given query text.
 ///
 /// Returns formatted context string suitable for injecting into a prompt.
@@ -395,11 +409,7 @@ pub fn search_context(
     );
 
     // Look up compaction boundary for the current session
-    let compact_boundary = session_id
-        .map(|sid| queries::get_session(conn, sid))
-        .transpose()?
-        .flatten()
-        .and_then(|s| s.last_compact_line_index);
+    let compact_boundary = compact_boundary_for(conn, session_id)?;
 
     // Phase 3: Vector over-fetch + in-context filter (SQL)
     let k_internal = k * OVER_FETCH_MULTIPLIER;
@@ -549,11 +559,7 @@ pub fn search_file_context(
         return Ok(String::new());
     };
 
-    let compact_boundary = session_id
-        .map(|sid| queries::get_session(conn, sid))
-        .transpose()?
-        .flatten()
-        .and_then(|s| s.last_compact_line_index);
+    let compact_boundary = compact_boundary_for(conn, session_id)?;
 
     let results = search_by_file_path(conn, &[&normalized], session_id, compact_boundary, k)?;
 

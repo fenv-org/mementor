@@ -63,7 +63,7 @@ where
     let output = serde_json::json!({
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
-            "additionalContext": format!("## Past context for {file_path}\n\n{ctx}")
+            "additionalContext": ctx
         }
     });
 
@@ -81,7 +81,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use mementor_lib::db::queries::{insert_file_mention, insert_memory, upsert_session};
+    use mementor_lib::db::queries::insert_file_mention;
     use mementor_lib::embedding::embedder::Embedder;
     use mementor_lib::output::BufferedIO;
 

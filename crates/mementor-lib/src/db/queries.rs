@@ -293,8 +293,7 @@ pub fn delete_file_mentions_at(
 /// Search for turns that mention any of the given file paths.
 ///
 /// Returns `(session_id, line_index)` pairs ranked by match count (descending).
-/// Uses partial path matching (suffix match) so `src/main.rs` matches
-/// `src/main.rs` stored in the table.
+/// Uses exact path matching against normalized file paths stored in the table.
 ///
 /// When `exclude_session_id` is provided, results from that session are
 /// filtered out unless they fall at or before the `compact_boundary`.
