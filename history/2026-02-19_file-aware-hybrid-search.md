@@ -119,3 +119,5 @@ constant. Merge vector + file results via HashMap dedup.
 - `3520d11` — add file-aware hybrid search with path normalization (Steps 1–7)
 - `e2ffbbb` — simplify hook handlers and deduplicate helpers (post-review cleanup)
 - (pending) — capture `@`-mentioned file paths from user prompts
+- (pending) — address code review: empty-result guard, ingest CLI project_root,
+  sort before dedup in `extract_file_hints`/`extract_at_mentions`

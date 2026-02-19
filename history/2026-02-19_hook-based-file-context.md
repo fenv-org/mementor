@@ -82,14 +82,16 @@ format as context string. No embedding needed.
 
 ### Step 10: PreToolUse Hook Handler
 
-- `PreToolUseInput { session_id, tool_name, tool_input }` input struct
+- `PreToolUseInput { session_id, tool_name, tool_input, cwd }` input struct
 - Extract `file_path` or `notebook_path` from `tool_input`
 - Output JSON with `additionalContext`
 - Hook registration: matcher `Read|Edit|Write|NotebookEdit`
 
 ### Step 11: SubagentStart Hook Handler
 
-- `SubagentStartInput { session_id, agent_id, agent_type }` input struct
+- `SubagentStartInput { session_id, cwd }` input struct (simplified from
+  original plan which had `agent_id` and `agent_type` — these fields are not
+  needed for the file list use case)
 - Query recent file mentions, format as file list
 - Output JSON with `additionalContext`
 - Hook registration: no matcher (all subagent types)
@@ -124,3 +126,5 @@ Register both new hooks in `configure_hooks()`. Update existing enable tests.
 
 - `532e0e4` — add PreToolUse and SubagentStart hook handlers (Steps 10–12)
 - `e2ffbbb` — simplify hook handlers and deduplicate helpers (post-review cleanup)
+- (pending) — address code review findings: full struct assertions, empty-result
+  guard in `search_file_context`, fix ingest CLI `project_root`, sort before dedup

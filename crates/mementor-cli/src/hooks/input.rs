@@ -70,7 +70,7 @@ pub fn read_pre_compact_input(reader: &mut dyn std::io::Read) -> anyhow::Result<
 }
 
 /// Input received from the Claude Code `PreToolUse` hook via stdin.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, PartialEq, Deserialize)]
 pub struct PreToolUseInput {
     /// The session ID of the Claude Code conversation.
     pub session_id: String,
@@ -91,7 +91,7 @@ pub fn read_pre_tool_use_input(reader: &mut dyn std::io::Read) -> anyhow::Result
 }
 
 /// Input received from the Claude Code `SubagentStart` hook via stdin.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, PartialEq, Deserialize)]
 pub struct SubagentStartInput {
     /// The session ID of the Claude Code conversation.
     pub session_id: String,
@@ -181,25 +181,42 @@ mod tests {
     fn parse_pre_tool_use_input() {
         let json = r#"{"session_id": "abc-123", "tool_name": "Read", "tool_input": {"file_path": "/tmp/main.rs"}, "cwd": "/home/user/project"}"#;
         let input = read_pre_tool_use_input(&mut json.as_bytes()).unwrap();
-        assert_eq!(input.session_id, "abc-123");
-        assert_eq!(input.tool_name, "Read");
-        assert_eq!(input.tool_input["file_path"], "/tmp/main.rs");
-        assert_eq!(input.cwd, "/home/user/project");
+        assert_eq!(
+            input,
+            PreToolUseInput {
+                session_id: "abc-123".to_string(),
+                tool_name: "Read".to_string(),
+                tool_input: serde_json::json!({"file_path": "/tmp/main.rs"}),
+                cwd: "/home/user/project".to_string(),
+            }
+        );
     }
 
     #[test]
     fn parse_pre_tool_use_input_no_file_path() {
         let json = r#"{"session_id": "abc-123", "tool_name": "Bash", "tool_input": {"command": "ls"}, "cwd": "/tmp"}"#;
         let input = read_pre_tool_use_input(&mut json.as_bytes()).unwrap();
-        assert_eq!(input.tool_name, "Bash");
-        assert!(input.tool_input.get("file_path").is_none());
+        assert_eq!(
+            input,
+            PreToolUseInput {
+                session_id: "abc-123".to_string(),
+                tool_name: "Bash".to_string(),
+                tool_input: serde_json::json!({"command": "ls"}),
+                cwd: "/tmp".to_string(),
+            }
+        );
     }
 
     #[test]
     fn parse_subagent_start_input() {
         let json = r#"{"session_id": "abc-123", "cwd": "/home/user/project"}"#;
         let input = read_subagent_start_input(&mut json.as_bytes()).unwrap();
-        assert_eq!(input.session_id, "abc-123");
-        assert_eq!(input.cwd, "/home/user/project");
+        assert_eq!(
+            input,
+            SubagentStartInput {
+                session_id: "abc-123".to_string(),
+                cwd: "/home/user/project".to_string(),
+            }
+        );
     }
 }

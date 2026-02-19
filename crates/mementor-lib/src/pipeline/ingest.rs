@@ -172,6 +172,7 @@ fn extract_at_mentions(turn_text: &str, project_dir: &str, project_root: &str) -
             }
         }
     }
+    result.sort();
     result.dedup();
     result
 }
@@ -190,6 +191,7 @@ pub fn extract_file_hints(query: &str) -> Vec<&str> {
         })
         .filter(|t| looks_like_path(t))
         .collect();
+    hints.sort_unstable();
     hints.dedup();
     hints
 }
@@ -606,7 +608,8 @@ pub fn search_file_context(
         .collect();
     let turn_texts = get_turns_chunks(conn, &turn_keys)?;
 
-    let mut ctx = format!("## Past context for {normalized}\n\n");
+    let header = format!("## Past context for {normalized}\n\n");
+    let mut ctx = header.clone();
     for (i, (sid, line_idx)) in results.iter().enumerate() {
         let key = (sid.clone(), *line_idx);
         let full_text = turn_texts
@@ -618,6 +621,10 @@ pub fn search_file_context(
         }
 
         write!(&mut ctx, "### Memory {}\n{}\n\n", i + 1, full_text).unwrap();
+    }
+
+    if ctx == header {
+        return Ok(String::new());
     }
 
     Ok(ctx)
@@ -1260,7 +1267,7 @@ mod tests {
     #[test]
     fn extract_file_hints_multiple() {
         let hints = extract_file_hints("compare ingest.rs and chunker.rs");
-        assert_eq!(hints, vec!["ingest.rs", "chunker.rs"]);
+        assert_eq!(hints, vec!["chunker.rs", "ingest.rs"]);
     }
 
     // --- extract_quoted_value tests ---

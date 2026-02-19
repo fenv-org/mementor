@@ -32,15 +32,16 @@ where
         anyhow::bail!("Transcript file not found: {transcript}");
     }
 
-    let project_dir = runtime.context.project_root().to_string_lossy().to_string();
+    let cwd = std::env::current_dir()?.to_string_lossy().to_string();
+    let project_root = runtime.context.project_root().to_string_lossy().to_string();
     run_ingest(
         &conn,
         &mut embedder,
         &tokenizer,
         session_id,
         transcript_path,
-        &project_dir,
-        &project_dir,
+        &cwd,
+        &project_root,
     )?;
 
     writeln!(io.stdout(), "Ingestion complete for session {session_id}.")?;
