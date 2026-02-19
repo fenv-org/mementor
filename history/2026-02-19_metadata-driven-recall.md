@@ -82,3 +82,6 @@ Two valuable transcript signals remain unindexed after v2 Tasks 1-3:
   `try_run_ingest_with_compaction_summary`,
   `try_run_ingest_compaction_and_regular_roles`
 - [x] Verify: clippy + all tests pass
+- [x] Move `make_entry`, `write_transcript`, `make_pr_link_entry` to
+  `mementor-test-util::transcript` module to eliminate duplication between
+  `ingest.rs` tests and `mementor-cli/test_util.rs`

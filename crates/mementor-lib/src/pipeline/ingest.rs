@@ -661,7 +661,7 @@ mod tests {
     use super::*;
     use crate::db::driver::DatabaseDriver;
     use crate::pipeline::chunker::load_tokenizer;
-    use std::io::Write;
+    use mementor_test_util::transcript::{make_entry, make_pr_link_entry, write_transcript};
 
     fn setup_test() -> (tempfile::TempDir, Connection, Embedder, Tokenizer) {
         let tmp = tempfile::tempdir().unwrap();
@@ -671,39 +671,6 @@ mod tests {
         let embedder = Embedder::new().unwrap();
         let tokenizer = load_tokenizer().unwrap();
         (tmp, conn, embedder, tokenizer)
-    }
-
-    fn write_transcript(dir: &Path, lines: &[&str]) -> std::path::PathBuf {
-        let path = dir.join("transcript.jsonl");
-        let mut f = std::fs::File::create(&path).unwrap();
-        for line in lines {
-            writeln!(f, "{line}").unwrap();
-        }
-        path
-    }
-
-    fn make_entry(role: &str, text: &str) -> String {
-        serde_json::json!({
-            "type": "message",
-            "uuid": format!("uuid-{}", rand_id()),
-            "sessionId": "test-session",
-            "timestamp": "2026-01-01T00:00:00Z",
-            "message": {
-                "role": role,
-                "content": text
-            }
-        })
-        .to_string()
-    }
-
-    fn rand_id() -> u64 {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-        use std::time::SystemTime;
-        let mut h = DefaultHasher::new();
-        SystemTime::now().hash(&mut h);
-        std::thread::current().id().hash(&mut h);
-        h.finish()
     }
 
     #[test]
@@ -1354,18 +1321,6 @@ mod tests {
         );
     }
 
-    fn make_pr_link_line(session_id: &str, pr_number: u32) -> String {
-        serde_json::json!({
-            "type": "pr-link",
-            "sessionId": session_id,
-            "prNumber": pr_number,
-            "prUrl": format!("https://github.com/fenv-org/mementor/pull/{pr_number}"),
-            "prRepository": "fenv-org/mementor",
-            "timestamp": "2026-02-17T00:00:00Z"
-        })
-        .to_string()
-    }
-
     #[test]
     fn ingest_stores_pr_links() {
         let (tmp, conn, mut embedder, tokenizer) = setup_test();
@@ -1373,7 +1328,12 @@ mod tests {
         let lines = vec![
             make_entry("user", "Hello"),
             make_entry("assistant", "Hi there"),
-            make_pr_link_line("s1", 14),
+            make_pr_link_entry(
+                "s1",
+                14,
+                "https://github.com/fenv-org/mementor/pull/14",
+                "fenv-org/mementor",
+            ),
         ];
         let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
         let transcript = write_transcript(tmp.path(), &refs);
@@ -1443,7 +1403,12 @@ mod tests {
         let lines = vec![
             make_entry("user", "Hello"),
             make_entry("assistant", "Hi"),
-            make_pr_link_line("s1", 14),
+            make_pr_link_entry(
+                "s1",
+                14,
+                "https://github.com/fenv-org/mementor/pull/14",
+                "fenv-org/mementor",
+            ),
         ];
         let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
         let transcript = write_transcript(tmp.path(), &refs);
