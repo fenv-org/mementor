@@ -33,6 +33,17 @@ fn migrations() -> Migrations<'static> {
         ),
         // v2: Add compaction boundary tracking
         M::up("ALTER TABLE sessions ADD COLUMN last_compact_line_index INTEGER;"),
+        // v3: File mentions table for file-aware hybrid search
+        M::up(
+            "CREATE TABLE file_mentions (
+                session_id   TEXT NOT NULL REFERENCES sessions(session_id),
+                line_index   INTEGER NOT NULL,
+                file_path    TEXT NOT NULL,
+                tool_name    TEXT NOT NULL,
+                UNIQUE(session_id, line_index, file_path, tool_name)
+            );
+            CREATE INDEX idx_file_mentions_path ON file_mentions(file_path);",
+        ),
     ])
 }
 
@@ -225,5 +236,155 @@ mod tests {
             .query_row("SELECT count(*) FROM memories", [], |row| row.get(0))
             .unwrap();
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn v2_to_v3_migration_preserves_data() {
+        let mut conn = Connection::open_in_memory().unwrap();
+
+        // Apply v1 + v2 migrations only
+        let v2 = Migrations::new(vec![
+            M::up(
+                "CREATE TABLE sessions (
+                    session_id                TEXT PRIMARY KEY,
+                    transcript_path           TEXT NOT NULL,
+                    project_dir               TEXT NOT NULL,
+                    last_line_index           INTEGER NOT NULL DEFAULT 0,
+                    provisional_turn_start    INTEGER,
+                    created_at                TEXT NOT NULL DEFAULT (datetime('now')),
+                    updated_at                TEXT NOT NULL DEFAULT (datetime('now'))
+                );
+                CREATE TABLE memories (
+                    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id       TEXT NOT NULL REFERENCES sessions(session_id),
+                    line_index       INTEGER NOT NULL,
+                    chunk_index      INTEGER NOT NULL,
+                    role             TEXT NOT NULL,
+                    content          TEXT NOT NULL,
+                    embedding        BLOB,
+                    created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+                    UNIQUE(session_id, line_index, chunk_index)
+                );
+                CREATE INDEX idx_memories_session
+                    ON memories(session_id, line_index);",
+            ),
+            M::up("ALTER TABLE sessions ADD COLUMN last_compact_line_index INTEGER;"),
+        ]);
+        v2.to_latest(&mut conn).unwrap();
+
+        // Insert v2 data
+        conn.execute(
+            "INSERT INTO sessions (session_id, transcript_path, project_dir, last_line_index, last_compact_line_index)
+             VALUES ('s1', '/tmp/t.jsonl', '/tmp/p', 10, 5)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO memories (session_id, line_index, chunk_index, role, content)
+             VALUES ('s1', 0, 0, 'turn', 'hello world')",
+            [],
+        )
+        .unwrap();
+
+        // Apply all migrations (v1+v2 already done, so only v3 runs)
+        apply_migrations(&mut conn).unwrap();
+
+        // Verify existing data is preserved
+        let (sid, line_idx, compact_idx): (String, i64, Option<i64>) = conn
+            .query_row(
+                "SELECT session_id, last_line_index, last_compact_line_index FROM sessions WHERE session_id = 's1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(sid, "s1");
+        assert_eq!(line_idx, 10);
+        assert_eq!(compact_idx, Some(5));
+
+        // Verify memories data is preserved
+        let mem_content: String = conn
+            .query_row(
+                "SELECT content FROM memories WHERE session_id = 's1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(mem_content, "hello world");
+
+        // Verify file_mentions table exists and is usable
+        conn.execute(
+            "INSERT INTO file_mentions (session_id, line_index, file_path, tool_name)
+             VALUES ('s1', 0, 'src/main.rs', 'Read')",
+            [],
+        )
+        .unwrap();
+        let count: i64 = conn
+            .query_row("SELECT count(*) FROM file_mentions", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn zero_to_v3_fresh_install() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        apply_migrations(&mut conn).unwrap();
+
+        // Verify all three tables exist
+        let table_count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('sessions', 'memories', 'file_mentions')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(table_count, 3);
+
+        // Verify file_mentions has correct columns and constraints
+        conn.execute(
+            "INSERT INTO sessions (session_id, transcript_path, project_dir, last_line_index)
+             VALUES ('s1', '/tmp/t.jsonl', '/tmp/p', 0)",
+            [],
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO file_mentions (session_id, line_index, file_path, tool_name)
+             VALUES ('s1', 0, 'src/main.rs', 'Read')",
+            [],
+        )
+        .unwrap();
+
+        // UNIQUE constraint: duplicate insert should be ignored with INSERT OR IGNORE
+        let changed = conn
+            .execute(
+                "INSERT OR IGNORE INTO file_mentions (session_id, line_index, file_path, tool_name)
+                 VALUES ('s1', 0, 'src/main.rs', 'Read')",
+                [],
+            )
+            .unwrap();
+        assert_eq!(changed, 0);
+
+        // Different tool_name for same path is allowed
+        conn.execute(
+            "INSERT INTO file_mentions (session_id, line_index, file_path, tool_name)
+             VALUES ('s1', 0, 'src/main.rs', 'Edit')",
+            [],
+        )
+        .unwrap();
+
+        let count: i64 = conn
+            .query_row("SELECT count(*) FROM file_mentions", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 2);
+
+        // Verify index exists
+        let idx_count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='index' AND name='idx_file_mentions_path'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(idx_count, 1);
     }
 }

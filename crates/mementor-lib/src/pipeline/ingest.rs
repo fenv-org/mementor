@@ -4,6 +4,7 @@
     clippy::cast_sign_loss
 )]
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::path::Path;
@@ -13,14 +14,187 @@ use rusqlite::Connection;
 use tokenizers::Tokenizer;
 use tracing::{debug, info};
 
-use crate::config::{MAX_COSINE_DISTANCE, OVER_FETCH_MULTIPLIER};
+use crate::config::{FILE_MATCH_DISTANCE, MAX_COSINE_DISTANCE, OVER_FETCH_MULTIPLIER};
 use crate::db::queries::{
-    self, Session, delete_memories_at, get_turns_chunks, insert_memory, search_memories,
-    upsert_session,
+    self, Session, delete_file_mentions_at, delete_memories_at, get_turns_chunks,
+    insert_file_mention, insert_memory, search_by_file_path, search_memories, upsert_session,
 };
 use crate::embedding::embedder::Embedder;
 use crate::pipeline::chunker::{chunk_turn, group_into_turns};
 use crate::transcript::parser::parse_transcript;
+
+/// Normalize a file path to a relative path from the project root.
+///
+/// Tries stripping `project_dir` (current worktree CWD) or `project_root`
+/// (primary worktree root). If the path is already relative, returns it as-is.
+/// Returns `None` for absolute paths outside both directories.
+fn normalize_path<'a>(
+    path: &'a str,
+    project_dir: &str,
+    project_root: &str,
+) -> Option<Cow<'a, str>> {
+    if !path.starts_with('/') {
+        // Already relative — keep as-is
+        return Some(Cow::Borrowed(path));
+    }
+
+    // Try stripping project_dir first (current worktree), then project_root (primary)
+    for prefix in [project_dir, project_root] {
+        let prefix = prefix.strip_suffix('/').unwrap_or(prefix);
+        if let Some(rel) = path.strip_prefix(prefix) {
+            let rel = rel.strip_prefix('/').unwrap_or(rel);
+            if rel.is_empty() {
+                return None;
+            }
+            return Some(Cow::Owned(rel.to_string()));
+        }
+    }
+
+    // Absolute path outside the project
+    None
+}
+
+/// Known file extensions for heuristic path detection.
+const FILE_EXTENSIONS: &[&str] = &[
+    ".rs", ".ts", ".tsx", ".js", ".jsx", ".py", ".go", ".java", ".c", ".cpp", ".h", ".hpp",
+    ".toml", ".yaml", ".yml", ".json", ".md", ".txt", ".sh", ".sql", ".html", ".css", ".lock",
+    ".xml", ".cfg", ".ini", ".env", ".rb", ".swift", ".kt", ".scala",
+];
+
+/// Extract file paths from tool summary strings.
+///
+/// Returns `(normalized_relative_path, tool_name)` pairs. Paths outside the
+/// project are silently discarded.
+fn extract_file_paths<'a>(
+    tool_summaries: &'a [String],
+    project_dir: &str,
+    project_root: &str,
+) -> Vec<(String, &'a str)> {
+    let mut result = Vec::new();
+
+    for summary in tool_summaries {
+        // Extract tool name (text before first '(')
+        let Some(paren_idx) = summary.find('(') else {
+            continue;
+        };
+        let tool_name = &summary[..paren_idx];
+        let args = &summary[paren_idx + 1..summary.len().saturating_sub(1)]; // strip outer parens
+
+        match tool_name {
+            "Read" | "Edit" | "Write" => {
+                // Format: Read(/path/to/file)
+                if let Some(normalized) = normalize_path(args, project_dir, project_root) {
+                    result.push((normalized.into_owned(), tool_name));
+                }
+            }
+            "NotebookEdit" => {
+                // Format: NotebookEdit(/path, cell_id="...", edit_mode="...")
+                let path = args.split(',').next().unwrap_or(args).trim();
+                if let Some(normalized) = normalize_path(path, project_dir, project_root) {
+                    result.push((normalized.into_owned(), tool_name));
+                }
+            }
+            "Grep" => {
+                // Format: Grep(pattern="...", path="...")
+                if let Some(path) = extract_quoted_value(args, "path")
+                    && let Some(normalized) = normalize_path(path, project_dir, project_root)
+                {
+                    result.push((normalized.into_owned(), tool_name));
+                }
+            }
+            "Bash" => {
+                // Format: Bash(desc="...", cmd="...")
+                if let Some(cmd) = extract_quoted_value(args, "cmd") {
+                    for token in extract_path_like_tokens(cmd) {
+                        if let Some(normalized) = normalize_path(token, project_dir, project_root) {
+                            result.push((normalized.into_owned(), tool_name));
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    result
+}
+
+/// Extract the value of a `key="value"` pair from a tool summary args string.
+fn extract_quoted_value<'a>(args: &'a str, key: &str) -> Option<&'a str> {
+    let needle = format!("{key}=\"");
+    let start = args.find(&needle)? + needle.len();
+    let remaining = &args[start..];
+    // Find the closing quote, handling escaped quotes
+    let mut prev_backslash = false;
+    for (idx, ch) in remaining.char_indices() {
+        if ch == '"' && !prev_backslash {
+            return Some(&remaining[..idx]);
+        }
+        prev_backslash = ch == '\\';
+    }
+    None
+}
+
+/// Returns `true` if a token looks like a file path or file name.
+fn looks_like_path(token: &str) -> bool {
+    !token.is_empty()
+        && (token.contains('/') || FILE_EXTENSIONS.iter().any(|ext| token.ends_with(ext)))
+}
+
+/// Extract path-like tokens from a command string.
+///
+/// Tokens are considered path-like if they contain `/` or end with a known
+/// file extension.
+fn extract_path_like_tokens(cmd: &str) -> Vec<&str> {
+    cmd.split_whitespace()
+        .map(|t| t.trim_matches(|c: char| c == '\'' || c == '"' || c == '`'))
+        .filter(|t| looks_like_path(t))
+        .collect()
+}
+
+/// Extract `@`-mentioned file paths from turn text.
+///
+/// Users reference files with `@/absolute/path` syntax in prompts. This
+/// function finds those mentions and normalizes them.
+fn extract_at_mentions(turn_text: &str, project_dir: &str, project_root: &str) -> Vec<String> {
+    let mut result = Vec::new();
+    for token in turn_text.split_whitespace() {
+        if let Some(path) = token.strip_prefix('@') {
+            // Strip trailing punctuation that might cling to the mention
+            let path = path.trim_end_matches(|c: char| {
+                c == ',' || c == ';' || c == ':' || c == ')' || c == '?' || c == '!'
+            });
+            if path.is_empty() {
+                continue;
+            }
+            if let Some(normalized) = normalize_path(path, project_dir, project_root) {
+                result.push(normalized.into_owned());
+            }
+        }
+    }
+    result.sort();
+    result.dedup();
+    result
+}
+
+/// Extract file path hints from a query string for hybrid search.
+///
+/// Identifies tokens that look like file paths or file names based on
+/// heuristics: contains `/` or ends with a known file extension.
+pub fn extract_file_hints(query: &str) -> Vec<&str> {
+    let mut hints: Vec<&str> = query
+        .split_whitespace()
+        .map(|t| {
+            t.trim_matches(|c: char| {
+                c == '`' || c == '\'' || c == '"' || c == '?' || c == ',' || c == ';' || c == ':'
+            })
+        })
+        .filter(|t| looks_like_path(t))
+        .collect();
+    hints.sort_unstable();
+    hints.dedup();
+    hints
+}
 
 /// Run the incremental ingest pipeline for a single session.
 ///
@@ -37,6 +211,7 @@ pub fn run_ingest(
     session_id: &str,
     transcript_path: &Path,
     project_dir: &str,
+    project_root: &str,
 ) -> anyhow::Result<()> {
     // Load or create session
     let session = queries::get_session(conn, session_id)?;
@@ -106,10 +281,13 @@ pub fn run_ingest(
         )?;
     }
 
-    // If a provisional turn existed, delete its old chunks
+    // If a provisional turn existed, delete its old chunks and file mentions
     if let Some(prov_line) = provisional_start {
         let deleted = delete_memories_at(conn, session_id, prov_line)?;
-        debug!("Deleted {deleted} provisional chunks at line_index={prov_line}");
+        let deleted_mentions = delete_file_mentions_at(conn, session_id, prov_line)?;
+        debug!(
+            "Deleted {deleted} provisional chunks and {deleted_mentions} file mentions at line_index={prov_line}"
+        );
     }
 
     // Process each turn: chunk -> embed -> store
@@ -151,6 +329,29 @@ pub fn run_ingest(
             )?;
         }
 
+        // Extract and store file mentions from tool summaries
+        let file_paths = extract_file_paths(&turn.tool_summary, project_dir, project_root);
+        for (file_path, tool_name) in &file_paths {
+            insert_file_mention(conn, session_id, turn.line_index, file_path, tool_name)?;
+        }
+
+        // Extract and store @-mentioned file paths from user text
+        let at_mentions = extract_at_mentions(&turn.text, project_dir, project_root);
+        for file_path in &at_mentions {
+            insert_file_mention(conn, session_id, turn.line_index, file_path, "mention")?;
+        }
+
+        let total_files = file_paths.len() + at_mentions.len();
+        if total_files > 0 {
+            debug!(
+                session_id = %session_id,
+                line_index = turn.line_index,
+                tool_files = file_paths.len(),
+                at_mentions = at_mentions.len(),
+                "Stored file mentions"
+            );
+        }
+
         if turn.provisional {
             new_provisional_start = Some(turn.line_index);
         }
@@ -190,15 +391,30 @@ pub fn run_ingest(
     Ok(())
 }
 
+/// Look up the compaction boundary for a session.
+fn compact_boundary_for(
+    conn: &Connection,
+    session_id: Option<&str>,
+) -> anyhow::Result<Option<usize>> {
+    Ok(session_id
+        .map(|sid| queries::get_session(conn, sid))
+        .transpose()?
+        .flatten()
+        .and_then(|s| s.last_compact_line_index))
+}
+
 /// Search memories across all sessions for the given query text.
 ///
 /// Returns formatted context string suitable for injecting into a prompt.
-/// Applies a multi-phase filter pipeline:
-/// 1. Over-fetch with in-context filtering (SQL-level)
-/// 2. Distance threshold
-/// 3. Dedup by turn (best chunk per turn)
-/// 4. Reconstruct full turn text from sibling chunks
-/// 5. Sort, truncate to k, format output
+/// Applies an 8-phase hybrid filter pipeline:
+/// 1. Embed query
+/// 2. Extract file hints from query text
+/// 3. Vector over-fetch + in-context filter (SQL-level)
+/// 4. File path search (if file hints found)
+/// 5. Distance threshold on vector results
+/// 6. Merge vector + file results
+/// 7. Sort, truncate to k
+/// 8. Reconstruct full turn text + format output
 #[allow(clippy::too_many_lines)]
 pub fn search_context(
     conn: &Connection,
@@ -215,17 +431,22 @@ pub fn search_context(
         "Searching memories"
     );
 
+    // Phase 1: Embed query
     let embeddings = embedder.embed_batch(&[query])?;
     let query_embedding = &embeddings[0];
 
-    // Look up compaction boundary for the current session
-    let compact_boundary = session_id
-        .map(|sid| queries::get_session(conn, sid))
-        .transpose()?
-        .flatten()
-        .and_then(|s| s.last_compact_line_index);
+    // Phase 2: Extract file hints from query text
+    let file_hints = extract_file_hints(query);
+    debug!(
+        file_hint_count = file_hints.len(),
+        file_hints = ?file_hints,
+        "Phase 2: file hints extracted"
+    );
 
-    // Phase 1: Over-fetch + in-context filter (SQL)
+    // Look up compaction boundary for the current session
+    let compact_boundary = compact_boundary_for(conn, session_id)?;
+
+    // Phase 3: Vector over-fetch + in-context filter (SQL)
     let k_internal = k * OVER_FETCH_MULTIPLIER;
     let candidates = search_memories(
         conn,
@@ -238,79 +459,105 @@ pub fn search_context(
     debug!(
         candidates = candidates.len(),
         k_internal = k_internal,
-        "Phase 1: over-fetch + in-context filter"
+        "Phase 3: vector over-fetch + in-context filter"
     );
 
-    if candidates.is_empty() {
-        debug!("No search results found after in-context filtering");
-        return Ok(String::new());
-    }
+    // Phase 4: File path search (skip if no file hints)
+    let file_results = if file_hints.is_empty() {
+        Vec::new()
+    } else {
+        search_by_file_path(conn, &file_hints, session_id, compact_boundary, k_internal)?
+    };
 
-    // Phase 2: Distance threshold
-    let after_distance: Vec<_> = candidates
+    debug!(
+        file_results = file_results.len(),
+        "Phase 4: file path search"
+    );
+
+    // Phase 5: Distance threshold on vector results
+    let after_threshold: Vec<_> = candidates
         .into_iter()
         .filter(|r| r.distance <= MAX_COSINE_DISTANCE)
         .collect();
 
     debug!(
-        after_distance = after_distance.len(),
+        after_threshold = after_threshold.len(),
         threshold = MAX_COSINE_DISTANCE,
-        "Phase 2: distance threshold"
+        "Phase 5: distance threshold"
     );
 
-    if after_distance.is_empty() {
-        debug!("No search results found after distance threshold");
+    // Phase 6: Merge — HashMap<(session_id, line_index), f64>
+    let mut merged: HashMap<(String, usize), f64> = HashMap::new();
+
+    // Add vector results (best distance per turn)
+    for result in &after_threshold {
+        let key = (result.session_id.clone(), result.line_index);
+        merged
+            .entry(key)
+            .and_modify(|d| {
+                if result.distance < *d {
+                    *d = result.distance;
+                }
+            })
+            .or_insert(result.distance);
+    }
+
+    // Add file results
+    for (sid, line_idx) in &file_results {
+        let key = (sid.clone(), *line_idx);
+        merged
+            .entry(key)
+            .and_modify(|d| {
+                // Keep the lower distance (vector match is better than synthetic)
+                if FILE_MATCH_DISTANCE < *d {
+                    *d = FILE_MATCH_DISTANCE;
+                }
+            })
+            .or_insert(FILE_MATCH_DISTANCE);
+    }
+
+    debug!(merged_count = merged.len(), "Phase 6: merge results");
+
+    if merged.is_empty() {
+        debug!("No search results found after merge");
         return Ok(String::new());
     }
 
-    // Phase 3: Dedup by turn — keep best chunk per (session_id, line_index)
-    let mut best_per_turn: HashMap<(&str, usize), usize> = HashMap::new();
-    for (idx, result) in after_distance.iter().enumerate() {
-        let key = (result.session_id.as_str(), result.line_index);
-        best_per_turn
-            .entry(key)
-            .and_modify(|existing_idx| {
-                if result.distance < after_distance[*existing_idx].distance {
-                    *existing_idx = idx;
-                }
-            })
-            .or_insert(idx);
-    }
+    // Phase 7: Sort by distance + truncate to k
+    let mut sorted: Vec<_> = merged.into_iter().collect();
+    sorted.sort_by(|a, b| a.1.total_cmp(&b.1));
+    sorted.truncate(k);
 
-    let mut deduped: Vec<_> = best_per_turn
-        .into_values()
-        .map(|idx| &after_distance[idx])
-        .collect();
-    deduped.sort_by(|a, b| a.distance.total_cmp(&b.distance));
-    deduped.truncate(k);
+    debug!(final_count = sorted.len(), "Phase 7: sort + truncate");
 
-    debug!(after_dedup = deduped.len(), "Phase 3: dedup by turn");
-
-    // Phase 4: Reconstruct full turn text from sibling chunks
-    let turn_keys: Vec<(&str, usize)> = deduped
+    // Phase 8: Reconstruct full turn text + format output
+    let turn_keys: Vec<(&str, usize)> = sorted
         .iter()
-        .map(|r| (r.session_id.as_str(), r.line_index))
+        .map(|((sid, line_idx), _)| (sid.as_str(), *line_idx))
         .collect();
     let turn_texts = get_turns_chunks(conn, &turn_keys)?;
 
     debug!(
         reconstructed_turns = turn_texts.len(),
-        "Phase 4: reconstruct turns"
+        "Phase 8: reconstruct turns"
     );
 
-    // Phase 5: Format output
     let mut ctx = String::from("## Relevant past context\n\n");
-    for (i, result) in deduped.iter().enumerate() {
-        let key = (result.session_id.clone(), result.line_index);
+    for (i, ((sid, line_idx), distance)) in sorted.iter().enumerate() {
+        let key = (sid.clone(), *line_idx);
         let full_text = turn_texts
             .get(&key)
-            .map_or_else(|| result.content.clone(), |chunks| chunks.join("\n\n"));
+            .map_or_else(String::new, |chunks| chunks.join("\n\n"));
+
+        if full_text.is_empty() {
+            continue;
+        }
 
         debug!(
             rank = i + 1,
-            distance = result.distance,
-            result_session_id = %result.session_id,
-            line_index = result.line_index,
+            distance = distance,
+            result_session_id = %sid,
+            line_index = line_idx,
             "Search result"
         );
 
@@ -318,10 +565,66 @@ pub fn search_context(
             &mut ctx,
             "### Memory {} (distance: {:.4})\n{}\n\n",
             i + 1,
-            result.distance,
+            distance,
             full_text,
         )
         .unwrap();
+    }
+
+    if ctx == "## Relevant past context\n\n" {
+        return Ok(String::new());
+    }
+
+    Ok(ctx)
+}
+
+/// Search file mentions for past context about a specific file path.
+///
+/// Pure file-path search without embedding computation. Used by the
+/// `PreToolUse` hook for fast context injection.
+pub fn search_file_context(
+    conn: &Connection,
+    file_path: &str,
+    project_dir: &str,
+    project_root: &str,
+    k: usize,
+    session_id: Option<&str>,
+) -> anyhow::Result<String> {
+    let Some(normalized) = normalize_path(file_path, project_dir, project_root) else {
+        return Ok(String::new());
+    };
+
+    let compact_boundary = compact_boundary_for(conn, session_id)?;
+
+    let results = search_by_file_path(conn, &[&normalized], session_id, compact_boundary, k)?;
+
+    if results.is_empty() {
+        return Ok(String::new());
+    }
+
+    let turn_keys: Vec<(&str, usize)> = results
+        .iter()
+        .map(|(sid, line_idx)| (sid.as_str(), *line_idx))
+        .collect();
+    let turn_texts = get_turns_chunks(conn, &turn_keys)?;
+
+    let header = format!("## Past context for {normalized}\n\n");
+    let mut ctx = header.clone();
+    for (i, (sid, line_idx)) in results.iter().enumerate() {
+        let key = (sid.clone(), *line_idx);
+        let full_text = turn_texts
+            .get(&key)
+            .map_or_else(String::new, |chunks| chunks.join("\n\n"));
+
+        if full_text.is_empty() {
+            continue;
+        }
+
+        write!(&mut ctx, "### Memory {}\n{}\n\n", i + 1, full_text).unwrap();
+    }
+
+    if ctx == header {
+        return Ok(String::new());
     }
 
     Ok(ctx)
@@ -395,6 +698,7 @@ mod tests {
             "s1",
             &transcript,
             "/tmp/project",
+            "/tmp/project",
         )
         .unwrap();
 
@@ -421,6 +725,7 @@ mod tests {
             "s1",
             &transcript,
             "/tmp/p",
+            "/tmp/p",
         )
         .unwrap();
 
@@ -442,6 +747,7 @@ mod tests {
             &tokenizer,
             "s1",
             &transcript,
+            "/tmp/p",
             "/tmp/p",
         )
         .unwrap();
@@ -477,6 +783,7 @@ mod tests {
             "s1",
             &transcript,
             "/tmp/p",
+            "/tmp/p",
         )
         .unwrap();
 
@@ -497,6 +804,7 @@ mod tests {
             &tokenizer,
             "s1",
             &transcript,
+            "/tmp/p",
             "/tmp/p",
         )
         .unwrap();
@@ -524,6 +832,7 @@ mod tests {
             "s1",
             &transcript,
             "/tmp/p",
+            "/tmp/p",
         )
         .unwrap();
         run_ingest(
@@ -532,6 +841,7 @@ mod tests {
             &tokenizer,
             "s1",
             &transcript,
+            "/tmp/p",
             "/tmp/p",
         )
         .unwrap();
@@ -698,6 +1008,287 @@ mod tests {
         // The reconstructed turn should contain BOTH chunks
         assert!(ctx.contains("chunk zero content"));
         assert!(ctx.contains("chunk one content"));
+    }
+
+    // --- normalize_path tests ---
+
+    #[test]
+    fn normalize_path_strips_project_dir() {
+        let result = normalize_path(
+            "/Users/x/mementor/src/main.rs",
+            "/Users/x/mementor",
+            "/Users/x/mementor",
+        );
+        assert_eq!(result.as_deref(), Some("src/main.rs"));
+    }
+
+    #[test]
+    fn normalize_path_strips_project_root() {
+        // Path is in primary worktree, but CWD is a different worktree
+        let result = normalize_path(
+            "/Users/x/mementor/src/main.rs",
+            "/Users/x/mementor-feature",
+            "/Users/x/mementor",
+        );
+        assert_eq!(result.as_deref(), Some("src/main.rs"));
+    }
+
+    #[test]
+    fn normalize_path_strips_worktree_dir() {
+        // Path is in current worktree (linked)
+        let result = normalize_path(
+            "/Users/x/mementor-feature/src/main.rs",
+            "/Users/x/mementor-feature",
+            "/Users/x/mementor",
+        );
+        assert_eq!(result.as_deref(), Some("src/main.rs"));
+    }
+
+    #[test]
+    fn normalize_path_relative_passthrough() {
+        let result = normalize_path("src/main.rs", "/Users/x/mementor", "/Users/x/mementor");
+        assert_eq!(result.as_deref(), Some("src/main.rs"));
+    }
+
+    #[test]
+    fn normalize_path_external_discarded() {
+        let result = normalize_path(
+            "/usr/local/lib/foo.so",
+            "/Users/x/mementor",
+            "/Users/x/mementor",
+        );
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn normalize_path_trailing_slash_on_prefix() {
+        let result = normalize_path(
+            "/Users/x/mementor/src/main.rs",
+            "/Users/x/mementor/",
+            "/Users/x/mementor/",
+        );
+        assert_eq!(result.as_deref(), Some("src/main.rs"));
+    }
+
+    #[test]
+    fn normalize_path_root_itself_discarded() {
+        let result = normalize_path(
+            "/Users/x/mementor",
+            "/Users/x/mementor",
+            "/Users/x/mementor",
+        );
+        assert!(result.is_none());
+    }
+
+    // --- extract_file_paths tests ---
+
+    #[test]
+    fn extract_file_paths_standard_tools() {
+        let summaries = vec![
+            "Read(/Users/x/mementor/src/main.rs)".to_string(),
+            "Edit(/Users/x/mementor/src/lib.rs)".to_string(),
+            "Write(/Users/x/mementor/Cargo.toml)".to_string(),
+        ];
+        let result = extract_file_paths(&summaries, "/Users/x/mementor", "/Users/x/mementor");
+        assert_eq!(
+            result,
+            vec![
+                ("src/main.rs".to_string(), "Read"),
+                ("src/lib.rs".to_string(), "Edit"),
+                ("Cargo.toml".to_string(), "Write"),
+            ]
+        );
+    }
+
+    #[test]
+    fn extract_file_paths_notebook_edit() {
+        let summaries = vec![
+            "NotebookEdit(/Users/x/mementor/notebook.ipynb, cell_id=\"abc\", edit_mode=\"replace\")".to_string(),
+        ];
+        let result = extract_file_paths(&summaries, "/Users/x/mementor", "/Users/x/mementor");
+        assert_eq!(
+            result,
+            vec![("notebook.ipynb".to_string(), "NotebookEdit"),]
+        );
+    }
+
+    #[test]
+    fn extract_file_paths_grep_with_path() {
+        let summaries = vec!["Grep(pattern=\"TODO\", path=\"/Users/x/mementor/src/\")".to_string()];
+        let result = extract_file_paths(&summaries, "/Users/x/mementor", "/Users/x/mementor");
+        assert_eq!(result, vec![("src/".to_string(), "Grep"),]);
+    }
+
+    #[test]
+    fn extract_file_paths_grep_without_path() {
+        let summaries = vec!["Grep(pattern=\"TODO\")".to_string()];
+        let result = extract_file_paths(&summaries, "/Users/x/mementor", "/Users/x/mementor");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn extract_file_paths_bash_with_paths() {
+        let summaries = vec!["Bash(cmd=\"cargo test /Users/x/mementor/src/main.rs\")".to_string()];
+        let result = extract_file_paths(&summaries, "/Users/x/mementor", "/Users/x/mementor");
+        assert_eq!(result, vec![("src/main.rs".to_string(), "Bash"),]);
+    }
+
+    #[test]
+    fn extract_file_paths_bash_with_relative_path() {
+        let summaries = vec!["Bash(cmd=\"cat src/main.rs\")".to_string()];
+        let result = extract_file_paths(&summaries, "/Users/x/mementor", "/Users/x/mementor");
+        assert_eq!(result, vec![("src/main.rs".to_string(), "Bash"),]);
+    }
+
+    #[test]
+    fn extract_file_paths_external_discarded() {
+        let summaries = vec!["Read(/usr/local/include/header.h)".to_string()];
+        let result = extract_file_paths(&summaries, "/Users/x/mementor", "/Users/x/mementor");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn extract_file_paths_non_file_tools_skipped() {
+        let summaries = vec![
+            "WebFetch(url=\"https://example.com\")".to_string(),
+            "WebSearch(query=\"rust serde\")".to_string(),
+            "Task(desc=\"Check CI\")".to_string(),
+        ];
+        let result = extract_file_paths(&summaries, "/Users/x/mementor", "/Users/x/mementor");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn extract_file_paths_worktree_normalization() {
+        let summaries = vec!["Read(/Users/x/mementor-feature/src/main.rs)".to_string()];
+        let result =
+            extract_file_paths(&summaries, "/Users/x/mementor-feature", "/Users/x/mementor");
+        assert_eq!(result, vec![("src/main.rs".to_string(), "Read"),]);
+    }
+
+    // --- extract_at_mentions tests ---
+
+    #[test]
+    fn extract_at_mentions_absolute_path() {
+        let result = extract_at_mentions(
+            "[User] check @/Users/x/mementor/src/main.rs please",
+            "/Users/x/mementor",
+            "/Users/x/mementor",
+        );
+        assert_eq!(result, vec!["src/main.rs"]);
+    }
+
+    #[test]
+    fn extract_at_mentions_worktree_normalization() {
+        let result = extract_at_mentions(
+            "[User] look at @/Users/x/mementor-feature/src/lib.rs",
+            "/Users/x/mementor-feature",
+            "/Users/x/mementor",
+        );
+        assert_eq!(result, vec!["src/lib.rs"]);
+    }
+
+    #[test]
+    fn extract_at_mentions_multiple() {
+        let result = extract_at_mentions(
+            "[User] compare @/Users/x/mementor/src/a.rs and @/Users/x/mementor/src/b.rs",
+            "/Users/x/mementor",
+            "/Users/x/mementor",
+        );
+        assert_eq!(result, vec!["src/a.rs", "src/b.rs"]);
+    }
+
+    #[test]
+    fn extract_at_mentions_trailing_punctuation() {
+        let result = extract_at_mentions(
+            "[User] what about @/Users/x/mementor/src/main.rs?",
+            "/Users/x/mementor",
+            "/Users/x/mementor",
+        );
+        assert_eq!(result, vec!["src/main.rs"]);
+    }
+
+    #[test]
+    fn extract_at_mentions_external_path_discarded() {
+        let result = extract_at_mentions(
+            "[User] check @/tmp/random/file.txt",
+            "/Users/x/mementor",
+            "/Users/x/mementor",
+        );
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn extract_at_mentions_no_mentions() {
+        let result = extract_at_mentions(
+            "[User] just a normal question",
+            "/Users/x/mementor",
+            "/Users/x/mementor",
+        );
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn extract_at_mentions_bare_at_sign_ignored() {
+        let result = extract_at_mentions(
+            "[User] send email @ someone",
+            "/Users/x/mementor",
+            "/Users/x/mementor",
+        );
+        assert!(result.is_empty());
+    }
+
+    // --- extract_file_hints tests ---
+
+    #[test]
+    fn extract_file_hints_with_extension() {
+        let hints = extract_file_hints("What does main.rs do?");
+        assert_eq!(hints, vec!["main.rs"]);
+    }
+
+    #[test]
+    fn extract_file_hints_with_path() {
+        let hints = extract_file_hints("explain src/pipeline/ingest.rs");
+        assert_eq!(hints, vec!["src/pipeline/ingest.rs"]);
+    }
+
+    #[test]
+    fn extract_file_hints_with_backticks() {
+        let hints = extract_file_hints("what is `src/main.rs`?");
+        assert_eq!(hints, vec!["src/main.rs"]);
+    }
+
+    #[test]
+    fn extract_file_hints_no_matches() {
+        let hints = extract_file_hints("how do I implement authentication");
+        assert!(hints.is_empty());
+    }
+
+    #[test]
+    fn extract_file_hints_multiple() {
+        let hints = extract_file_hints("compare ingest.rs and chunker.rs");
+        assert_eq!(hints, vec!["chunker.rs", "ingest.rs"]);
+    }
+
+    // --- extract_quoted_value tests ---
+
+    #[test]
+    fn extract_quoted_value_basic() {
+        let args = r#"pattern="TODO", path="src/""#;
+        assert_eq!(extract_quoted_value(args, "path"), Some("src/"));
+        assert_eq!(extract_quoted_value(args, "pattern"), Some("TODO"));
+    }
+
+    #[test]
+    fn extract_quoted_value_with_escaped_quotes() {
+        let args = r#"cmd="echo \"hello\"""#;
+        assert_eq!(extract_quoted_value(args, "cmd"), Some(r#"echo \"hello\""#));
+    }
+
+    #[test]
+    fn extract_quoted_value_missing() {
+        let args = r#"pattern="TODO""#;
+        assert_eq!(extract_quoted_value(args, "path"), None);
     }
 
     #[test]

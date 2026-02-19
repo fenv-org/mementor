@@ -71,10 +71,20 @@ Tag post-compaction summary messages with a special role (`compaction_summary`)
 to distinguish them from regular turns. These are dense information nuggets
 that compress entire conversation phases.
 
+### R6: Hook-Based File Context Injection
+
+Inject past context when Claude accesses files or spawns subagents, using the
+`file_mentions` infrastructure from R3. Two new hooks:
+- **PreToolUse** (Read|Edit|Write|NotebookEdit): inject past context about the
+  file being accessed via `additionalContext` JSON output.
+- **SubagentStart**: inject a compact list of recently touched files from the
+  current session into the subagent's context.
+
 ## Architecture Overview
 
-All changes extend the existing incremental ingest pipeline (`run_ingest`)
-and search pipeline (`search_context`). No new hooks are needed.
+Tasks 1–4 extend the existing incremental ingest pipeline (`run_ingest`)
+and search pipeline (`search_context`). Task 5 adds two new Claude Code hooks
+(PreToolUse, SubagentStart) that reuse the `file_mentions` infrastructure.
 
 ```
 Transcript JSONL
@@ -102,6 +112,15 @@ search_context() -- 8-phase pipeline
   |-- [R3] Extract file hints from query text
   |-- [R3] File path search via search_by_file_path()
   +-- [R3] Merge results (file matches get distance=0.40)
+
+PreToolUse hook (Read|Edit|Write|NotebookEdit) -- [R6]
+  |-- Normalize file_path via normalize_path()
+  |-- search_by_file_path() + get_turns_chunks() (no embedding)
+  +-- Output JSON { hookSpecificOutput: { additionalContext: "..." } }
+
+SubagentStart hook -- [R6]
+  |-- get_recent_file_mentions() (top 10 files)
+  +-- Output JSON { hookSpecificOutput: { additionalContext: "..." } }
 ```
 
 ## Implementation Plan
@@ -112,20 +131,22 @@ search_context() -- 8-phase pipeline
 | 2 | [tool-context-enrichment](2026-02-18_tool-context-enrichment.md) | types.rs + parser.rs + chunker.rs | Task 1 |
 | 3 | [file-aware-hybrid-recall](2026-02-18_file-aware-hybrid-recall.md) | schema + queries + ingest.rs | Task 2 |
 | 4 | [metadata-driven-recall](2026-02-18_metadata-driven-recall.md) | schema + parser + ingest.rs | Task 3 |
+| 5 | [hook-based-file-context](2026-02-19_hook-based-file-context.md) | hooks + enable + queries | Task 3 |
 
-**Dependency chain:** Task 1 -> Task 2 -> Task 3 -> Task 4
+**Dependency chain:** Task 1 -> Task 2 -> Task 3 -> Task 4 -> Task 5
 
 ```
-Task 1: Thinking blocks --> Task 2: Tool context --> Task 3: Hybrid recall --> Task 4: Metadata
-  (types.rs: ContentBlock)   (types.rs: ToolUse,     (schema: v3 migration,   (schema: v4 migration,
-                               parser: tool_summary,   queries: file_mentions,   parser: pr-link,
-                               chunker: [Tools] line)  ingest: hybrid search)   ingest: compaction)
+Task 1: Thinking blocks --> Task 2: Tool context --> Task 3: Hybrid recall --> Task 4: Metadata --> Task 5: File hooks
+  (types.rs: ContentBlock)   (types.rs: ToolUse,     (schema: v3 migration,   (schema: v4 migration,   (PreToolUse,
+                               parser: tool_summary,   queries: file_mentions,   parser: pr-link,         SubagentStart,
+                               chunker: [Tools] line)  ingest: hybrid search)   ingest: compaction)      enable: register)
 ```
 
 ## Design Constraints
 
-- **No new hooks**: All data comes from the existing transcript JSONL,
-  processed during Stop/PreCompact hooks (already in place).
+- **No new hooks (Tasks 1–4)**: Data comes from existing transcript JSONL,
+  processed during Stop/PreCompact hooks. Task 5 adds two new hooks
+  (PreToolUse, SubagentStart) for real-time context injection.
 - **Crash resilient**: Same incremental `last_line_index` pattern. No
   dependency on `SessionEnd` (which may never fire).
 - **Backward compatible**: Existing memories table untouched. New tables

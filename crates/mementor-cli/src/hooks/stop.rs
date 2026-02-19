@@ -41,6 +41,7 @@ where
     let mut embedder = Embedder::new()?;
     let tokenizer = load_tokenizer()?;
 
+    let project_root = runtime.context.project_root().to_string_lossy();
     run_ingest(
         &conn,
         &mut embedder,
@@ -48,6 +49,7 @@ where
         &input.session_id,
         Path::new(&input.transcript_path),
         &input.cwd,
+        &project_root,
     )?;
 
     Ok(())

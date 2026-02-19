@@ -48,6 +48,14 @@ where
                 let input = hooks::input::read_pre_compact_input(io.stdin())?;
                 hooks::pre_compact::handle_pre_compact(&input, runtime, io)
             }
+            HookCommand::PreToolUse => {
+                let input = hooks::input::read_pre_tool_use_input(io.stdin())?;
+                hooks::pre_tool_use::handle_pre_tool_use(&input, runtime, io)
+            }
+            HookCommand::SubagentStart => {
+                let input = hooks::input::read_subagent_start_input(io.stdin())?;
+                hooks::subagent_start::handle_subagent_start(&input, runtime, io)
+            }
         },
     }
 }

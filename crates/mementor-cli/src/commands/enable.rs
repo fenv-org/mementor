@@ -113,6 +113,21 @@ fn configure_hooks(ctx: &MementorContext) -> anyhow::Result<()> {
         }]
     });
 
+    let pre_tool_use_hook = serde_json::json!({
+        "matcher": "Read|Edit|Write|NotebookEdit",
+        "hooks": [{
+            "type": "command",
+            "command": "mementor hook pre-tool-use"
+        }]
+    });
+
+    let subagent_start_hook = serde_json::json!({
+        "hooks": [{
+            "type": "command",
+            "command": "mementor hook subagent-start"
+        }]
+    });
+
     // Merge hooks into settings
     let hooks = settings
         .as_object_mut()
@@ -128,6 +143,8 @@ fn configure_hooks(ctx: &MementorContext) -> anyhow::Result<()> {
     upsert_hook_entry(hooks_obj, "Stop", stop_hook);
     upsert_hook_entry(hooks_obj, "UserPromptSubmit", prompt_hook);
     upsert_hook_entry(hooks_obj, "PreCompact", pre_compact_hook);
+    upsert_hook_entry(hooks_obj, "PreToolUse", pre_tool_use_hook);
+    upsert_hook_entry(hooks_obj, "SubagentStart", subagent_start_hook);
 
     // Write settings back, preserving original EOF newline behavior
     let mut formatted = serde_json::to_string_pretty(&settings)?;
@@ -323,6 +340,27 @@ mod tests {
                |          }
                |        ]
                |      }
+               |    ],
+               |    "PreToolUse": [
+               |      {
+               |        "matcher": "Read\|Edit\|Write\|NotebookEdit",
+               |        "hooks": [
+               |          {
+               |            "type": "command",
+               |            "command": "mementor hook pre-tool-use"
+               |          }
+               |        ]
+               |      }
+               |    ],
+               |    "SubagentStart": [
+               |      {
+               |        "hooks": [
+               |          {
+               |            "type": "command",
+               |            "command": "mementor hook subagent-start"
+               |          }
+               |        ]
+               |      }
                |    ]
                |  }
                |}"#,
@@ -384,6 +422,27 @@ mod tests {
                |          {
                |            "type": "command",
                |            "command": "mementor hook pre-compact"
+               |          }
+               |        ]
+               |      }
+               |    ],
+               |    "PreToolUse": [
+               |      {
+               |        "matcher": "Read\|Edit\|Write\|NotebookEdit",
+               |        "hooks": [
+               |          {
+               |            "type": "command",
+               |            "command": "mementor hook pre-tool-use"
+               |          }
+               |        ]
+               |      }
+               |    ],
+               |    "SubagentStart": [
+               |      {
+               |        "hooks": [
+               |          {
+               |            "type": "command",
+               |            "command": "mementor hook subagent-start"
                |          }
                |        ]
                |      }
@@ -551,6 +610,27 @@ mod tests {
                |          }
                |        ]
                |      }
+               |    ],
+               |    "PreToolUse": [
+               |      {
+               |        "matcher": "Read\|Edit\|Write\|NotebookEdit",
+               |        "hooks": [
+               |          {
+               |            "type": "command",
+               |            "command": "mementor hook pre-tool-use"
+               |          }
+               |        ]
+               |      }
+               |    ],
+               |    "SubagentStart": [
+               |      {
+               |        "hooks": [
+               |          {
+               |            "type": "command",
+               |            "command": "mementor hook subagent-start"
+               |          }
+               |        ]
+               |      }
                |    ]
                |  }
                |}
@@ -607,6 +687,15 @@ mod tests {
                |            "command": "my-linter check"
                |          }
                |        ]
+               |      },
+               |      {
+               |        "matcher": "Read\|Edit\|Write\|NotebookEdit",
+               |        "hooks": [
+               |          {
+               |            "type": "command",
+               |            "command": "mementor hook pre-tool-use"
+               |          }
+               |        ]
                |      }
                |    ],
                |    "Stop": [
@@ -635,6 +724,16 @@ mod tests {
                |          {
                |            "type": "command",
                |            "command": "mementor hook pre-compact"
+               |          }
+               |        ]
+               |      }
+               |    ],
+               |    "SubagentStart": [
+               |      {
+               |        "hooks": [
+               |          {
+               |            "type": "command",
+               |            "command": "mementor hook subagent-start"
                |          }
                |        ]
                |      }
@@ -716,6 +815,27 @@ mod tests {
                |          {
                |            "type": "command",
                |            "command": "mementor hook pre-compact"
+               |          }
+               |        ]
+               |      }
+               |    ],
+               |    "PreToolUse": [
+               |      {
+               |        "matcher": "Read\|Edit\|Write\|NotebookEdit",
+               |        "hooks": [
+               |          {
+               |            "type": "command",
+               |            "command": "mementor hook pre-tool-use"
+               |          }
+               |        ]
+               |      }
+               |    ],
+               |    "SubagentStart": [
+               |      {
+               |        "hooks": [
+               |          {
+               |            "type": "command",
+               |            "command": "mementor hook subagent-start"
                |          }
                |        ]
                |      }
@@ -880,6 +1000,27 @@ mod tests {
                |        "hooks": [
                |          {
                |            "command": "mementor hook user-prompt-submit",
+               |            "type": "command"
+               |          }
+               |        ]
+               |      }
+               |    ],
+               |    "PreToolUse": [
+               |      {
+               |        "matcher": "Read\|Edit\|Write\|NotebookEdit",
+               |        "hooks": [
+               |          {
+               |            "command": "mementor hook pre-tool-use",
+               |            "type": "command"
+               |          }
+               |        ]
+               |      }
+               |    ],
+               |    "SubagentStart": [
+               |      {
+               |        "hooks": [
+               |          {
+               |            "command": "mementor hook subagent-start",
                |            "type": "command"
                |          }
                |        ]
