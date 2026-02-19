@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use unicode_segmentation::UnicodeSegmentation;
 
 /// A single entry (line) in the Claude Code transcript JSONL file.
 #[derive(Debug, Deserialize)]
@@ -55,21 +56,33 @@ pub enum ContentBlock {
     Unknown,
 }
 
-/// Maximum length for individual field values in tool summaries.
-const MAX_VALUE_LEN: usize = 80;
+/// Maximum number of grapheme clusters for individual field values in tool
+/// summaries.
+const MAX_VALUE_GRAPHEMES: usize = 80;
 
 /// Escape double quotes in a string value for tool summary formatting.
 fn escape_quotes(s: &str) -> String {
     s.replace('"', "\\\"")
 }
 
-/// Truncate a string to `max_len` bytes at a safe UTF-8 boundary, appending
+/// Truncate a string to at most `max_graphemes` grapheme clusters, appending
 /// `...` if truncated.
-fn truncate(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len {
+fn truncate(s: &str, max_graphemes: usize) -> String {
+    // Each grapheme cluster is at least 1 byte, so if the byte length fits,
+    // the grapheme count must also fit — skip iteration entirely.
+    if s.len() <= max_graphemes {
+        return s.to_string();
+    }
+    let mut end = s.len();
+    for (count, (idx, _)) in s.grapheme_indices(true).enumerate() {
+        if count == max_graphemes {
+            end = idx;
+            break;
+        }
+    }
+    if end == s.len() {
         s.to_string()
     } else {
-        let end = s.floor_char_boundary(max_len);
         format!("{}...", &s[..end])
     }
 }
@@ -93,7 +106,7 @@ fn summarize_single_field(name: &str, input: &serde_json::Value, key: &str) -> S
     if let Some(val) = json_str(input, key) {
         format!(
             "{name}({key}=\"{}\")",
-            escape_quotes(&truncate(val, MAX_VALUE_LEN))
+            escape_quotes(&truncate(val, MAX_VALUE_GRAPHEMES))
         )
     } else {
         name.to_string()
@@ -135,7 +148,7 @@ fn summarize_search_tool(name: &str, input: &serde_json::Value) -> String {
     };
     let mut pairs = vec![format!(
         "pattern=\"{}\"",
-        escape_quotes(&truncate(pat, MAX_VALUE_LEN))
+        escape_quotes(&truncate(pat, MAX_VALUE_GRAPHEMES))
     )];
     if let Some(p) = json_str(input, "path") {
         pairs.push(format!("path=\"{}\"", escape_quotes(p)));
@@ -149,14 +162,14 @@ fn summarize_bash(input: &serde_json::Value) -> String {
     if let Some(d) = json_str(input, "description") {
         pairs.push(format!(
             "desc=\"{}\"",
-            escape_quotes(&truncate(d, MAX_VALUE_LEN))
+            escape_quotes(&truncate(d, MAX_VALUE_GRAPHEMES))
         ));
     }
     if let Some(c) = json_str(input, "command") {
         let first_line = c.lines().next().unwrap_or(c);
         pairs.push(format!(
             "cmd=\"{}\"",
-            escape_quotes(&truncate(first_line, MAX_VALUE_LEN))
+            escape_quotes(&truncate(first_line, MAX_VALUE_GRAPHEMES))
         ));
     }
     format_kv("Bash", &pairs)
@@ -168,14 +181,14 @@ fn summarize_task(input: &serde_json::Value) -> String {
     if let Some(d) = json_str(input, "description") {
         pairs.push(format!(
             "desc=\"{}\"",
-            escape_quotes(&truncate(d, MAX_VALUE_LEN))
+            escape_quotes(&truncate(d, MAX_VALUE_GRAPHEMES))
         ));
     }
     if let Some(p) = json_str(input, "prompt") {
         let first_line = p.lines().next().unwrap_or(p);
         pairs.push(format!(
             "prompt=\"{}\"",
-            escape_quotes(&truncate(first_line, MAX_VALUE_LEN))
+            escape_quotes(&truncate(first_line, MAX_VALUE_GRAPHEMES))
         ));
     }
     format_kv("Task", &pairs)
@@ -190,7 +203,7 @@ fn summarize_skill(input: &serde_json::Value) -> String {
     if let Some(a) = json_str(input, "args") {
         pairs.push(format!(
             "args=\"{}\"",
-            escape_quotes(&truncate(a, MAX_VALUE_LEN))
+            escape_quotes(&truncate(a, MAX_VALUE_GRAPHEMES))
         ));
     }
     format_kv("Skill", &pairs)
@@ -512,10 +525,14 @@ mod tests {
         );
         let msg: Message = serde_json::from_str(&json).unwrap();
         let summaries = msg.content.extract_tool_summary();
-        assert_eq!(summaries.len(), 1);
-        // Prompt should be truncated to 80 chars + "..."
-        assert!(summaries[0].contains("..."));
-        assert!(summaries[0].starts_with("Task(desc=\"Check CI\", prompt=\""));
+        // Prompt truncated to 80 grapheme clusters + "..."
+        let truncated_prompt = format!("{}...", "x".repeat(80));
+        assert_eq!(
+            summaries,
+            vec![format!(
+                "Task(desc=\"Check CI\", prompt=\"{truncated_prompt}\")"
+            )]
+        );
     }
 
     #[test]
@@ -639,13 +656,23 @@ mod tests {
     }
 
     #[test]
-    fn truncate_multibyte_utf8_safe() {
-        // 3-byte UTF-8 chars: each Korean Hangul syllable is 3 bytes
-        let s = "가나다라마바사"; // 7 chars, 21 bytes
-        let result = truncate(s, 5); // 5 bytes = 1 full char + boundary in 2nd char
-        // Should truncate at char boundary (1 char = 3 bytes), not panic
-        assert!(result.ends_with("..."));
-        assert!(result.starts_with('가'));
+    fn truncate_by_grapheme_cluster_count() {
+        // Korean Hangul: each syllable is 1 grapheme cluster
+        let s = "가나다라마바사"; // 7 graphemes
+        assert_eq!(truncate(s, 3), "가나다...");
+        assert_eq!(truncate(s, 7), "가나다라마바사"); // exact fit, no truncation
+
+        // Devanagari conjunct: क + ् + ष = 1 grapheme cluster
+        let s = "क्षabc"; // 4 graphemes: क्ष, a, b, c
+        assert_eq!(truncate(s, 2), "क्षa...");
+
+        // Emoji family: 👨‍👩‍👧‍👦 = 1 grapheme cluster
+        let s = "👨\u{200D}👩\u{200D}👧\u{200D}👦abc"; // 4 graphemes
+        assert_eq!(truncate(s, 2), "👨\u{200D}👩\u{200D}👧\u{200D}👦a...");
+
+        // ASCII: 1 char = 1 grapheme
+        assert_eq!(truncate("hello world", 5), "hello...");
+        assert_eq!(truncate("short", 10), "short"); // no truncation
     }
 
     #[test]

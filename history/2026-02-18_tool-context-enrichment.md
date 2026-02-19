@@ -196,6 +196,20 @@ Addressed 5 findings from automated code review (PR #25):
   to compare complete `Turn` structs (line_index + provisional + text) in a
   single `assert_eq!` call.
 
+## Grapheme cluster truncation
+
+Replaced byte-based `truncate()` (using `floor_char_boundary()`) with
+grapheme-cluster-based truncation using the `unicode-segmentation` crate.
+
+- `MAX_VALUE_LEN` (80 bytes) → `MAX_VALUE_GRAPHEMES` (80 grapheme clusters)
+- Correctly handles Devanagari conjuncts (क्ष = 1 cluster), emoji sequences
+  (👨‍👩‍👧‍👦 = 1 cluster), and CJK characters
+- Fast path: if `s.len() <= max_graphemes`, the grapheme count must also fit
+  (each cluster is at least 1 byte), so grapheme iteration is skipped entirely
+- Updated `truncate_by_grapheme_cluster_count` test with Korean, Devanagari,
+  emoji, and ASCII cases
+- Updated `extract_tool_summary_task` test to use full comparison
+
 ## Results
 
 - **Tests**: 117 → 135 (+18 new tests)
