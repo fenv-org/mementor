@@ -1,55 +1,67 @@
-# Recall Quality v3: Query-Side Improvement
+# Recall Quality v3: Query Intelligence and Access Pattern Search
 
 ## Motivation
 
-Recall quality v2 improves the **indexing/storage side** — better embeddings
+Recall quality v2 improves the **indexing/storage side** -- better embeddings
 via thinking blocks (R1) and tool context (R2), structured file-path lookup
-(R3), and metadata storage (R4/R5). But the **query side** is untouched:
-the raw user prompt is passed directly to the embedding model with zero
-preprocessing.
+(R3), and metadata storage (R4/R5). But two major dimensions remain unaddressed:
 
-This produces two failure modes:
+1. **Query-side failures.** Trivial prompts ("push", "/commit", "ok") produce
+   vague embeddings that match noise (distance 0.27-0.35). Non-trivial prompts
+   lack session context -- "why was this changed?" embeds without any hint of
+   which files are currently being worked on.
 
-1. **Trivial prompts waste compute and inject noise.** Short operational
-   commands ("push", "/commit", "ok", "check ci") produce vague embeddings
-   that match past instances of similar short commands (distance 0.27–0.35)
-   rather than substantive project context. These results consume context
-   tokens with no value.
+2. **Access pattern failures.** Text search finds conversations with similar
+   WORDS but misses sessions that worked on the same FILES. Two sessions editing
+   the same module use completely different language, but their file access
+   patterns are nearly identical. This behavioral signal is invisible to
+   text-only search.
 
-2. **Non-trivial prompts lack context.** Even reasonable queries like "why
-   was this file changed?" lack the specificity that session context could
-   provide. After v2 Task 3, the `file_mentions` table records which files
-   were touched in the current session. Appending these to the query before
-   embedding biases similarity toward relevant turns.
+3. **Subagent blind spot.** Subagent internal activity (file reads, edits, web
+   fetches, reasoning) lives in separate transcript files
+   (`<session-id>/subagents/agent-*.jsonl`) and is completely invisible to
+   search. File access patterns from subagents are lost.
 
-## Problem Analysis
+4. **Schema limitations.** Turns are implicit groupings of chunks -- no
+   first-class entity for per-turn metadata, no cascading deletes, fragile
+   full-text reconstruction. Adding new per-turn fields (agent_id, is_sidechain,
+   tool_summary) requires a structural change.
 
-### Current query flow
+## Experimental Validation
 
-```
-UserPromptSubmit hook stdin:
-  { session_id, prompt (nullable), cwd }
+Before designing the access pattern search, we validated that BGE-small-en-v1.5
+produces meaningful embeddings for file paths and that centroid-based session
+similarity works.
 
-prompt.rs handle_prompt():
-  1. Early return if prompt is empty
-  2. Early return if DB not ready
-  3. search_context(conn, embedder, &input.prompt, k=5, session_id)
-  4. Write results to stdout if non-empty
-```
+### File path distance spectrum
 
-No query classification, no enrichment, no context augmentation.
+Embedded individual file paths and measured cosine distance:
 
-### Observed failure examples
+| Pair | Distance | Interpretation |
+|------|----------|----------------|
+| Same module (e.g., `ingest.rs` vs `search.rs` in pipeline/) | 0.07-0.10 | Very close |
+| Same crate, different module | ~0.12 | Close |
+| Different crate | ~0.14 | Moderate |
+| Unrelated (e.g., `build.rs` vs `README.md`) | 0.31-0.36 | Distant |
 
-| Prompt | Distance | Matched content | Useful? |
-|--------|----------|-----------------|---------|
-| "push" | 0.28 | Past "push" conversation | No |
-| "/commit" | 0.31 | Past commit conversation | No |
-| "check ci" | 0.33 | Past CI check conversation | No |
-| "ok" | 0.35 | Past acknowledgment | No |
+### Session centroid clustering
 
-All produce low-quality matches against superficially similar past prompts
-rather than substantive project context.
+Computed mean embedding centroids from each session's accessed files:
+
+- Pipeline session centroid vs database session centroid: 0.062
+- Pipeline session centroid vs CLI session centroid: 0.074
+- Both correctly cluster by work area despite different conversation text.
+
+### Probe file retrieval
+
+Used a single file embedding as a probe against session centroids:
+
+- `pipeline/search.rs` -> pipeline session centroid at distance 0.042 (correct)
+- Accumulative centroid evolves smoothly as file access patterns change within
+  a session, correctly tracking work area transitions.
+
+These results confirm that file path embeddings carry strong semantic signal
+and that centroid-based session matching is viable.
 
 ## Requirements
 
@@ -63,10 +75,12 @@ Trivial prompt categories:
 - Short phrases with fewer than 3 words ("push", "ok", "check ci")
 - Acknowledgment patterns ("sounds good", "lgtm", "thanks", "got it")
 
+Zero-cost O(1) classification -- no embedding or DB access for skipped prompts.
+
 ### R2: Query Enrichment
 
-Augment non-trivial prompts with session context before embedding. After
-v2 Task 3, the `file_mentions` table records which files were touched in the
+Augment non-trivial prompts with session file/URL context before embedding.
+The `file_mentions` table (PR #28) records which files were touched in the
 current session. Appending recently-touched filenames transforms vague queries
 into contextually grounded ones.
 
@@ -76,147 +90,123 @@ Original: "why was this changed?"
 Enriched: "why was this changed?\n\n[Context: recently touched files: enable.rs, git.rs, query.rs]"
 ```
 
+### R3: Schema Redesign
+
+Make turns a first-class entity. Split `memories` into two tables:
+
+- **`turns`**: One row per turn with `full_text`, `tool_summary`, `agent_id`,
+  `is_sidechain`. Direct full-text access without chunk reconstruction.
+- **`chunks`**: One row per embedding chunk with FK to `turns` and cascading
+  deletes.
+
+This eliminates fragile chunk-to-turn reconstruction, enables per-turn metadata
+queries, and provides clean cascading deletes for provisional turn cleanup.
+
+### R4: Access Pattern Centroid Search
+
+Represent each session's file/URL access pattern as embedding centroids at
+multiple granularities:
+
+- **Full session centroid**: Mean embedding of all file paths accessed in the
+  session.
+- **Recent-5 centroid**: Mean of last 5 turns' file accesses.
+- **Recent-10 centroid**: Mean of last 10 turns' file accesses.
+
+At search time, embed the current session's file access pattern and find past
+sessions with similar patterns via `vector_full_scan` on the centroid table.
+Results are merged with text search results.
+
+### R5: Subagent Transcript Indexing
+
+Parse subagent JSONL files (`<session-id>/subagents/agent-*.jsonl`) and create
+turns linked to the parent session. Subagent turns are marked with `agent_id`
+and `is_sidechain = true`. Subagent file/URL accesses feed into the centroid
+pipeline alongside main transcript accesses.
+
 ## Architecture Overview
 
-All query-side logic lives in a new pipeline module. The search pipeline
-(`search_context`) remains unchanged — it receives a (possibly enriched)
-query string and searches as before.
+All changes extend the existing incremental ingest pipeline (`run_ingest`)
+and search pipeline (`search_context`). PR #28 added `PreToolUse` and
+`SubagentStart` hooks that provide additional integration points.
 
 ```
-UserPromptSubmit hook
+Transcript JSONL (main + subagents)
   |
-  +-- [existing] Early return if empty prompt or DB not ready
+parse_transcript() -> Vec<ParsedMessage>
+  |-- [R3] Same parsing for main and subagent transcripts
+  |-- [R5] Discover subagent files from <session-id>/subagents/
   |
-  +-- [R1] classify_query(prompt) -> QueryClass
-  |     Trivial? -> debug log + return (no recall)
+group_into_turns() -> Vec<Turn>
+  |-- [R3] Turn has full_text, tool_summary, agent_id, is_sidechain
+  |       (Turn.tool_summary already exists from PR #28)
   |
-  +-- [R2] enrich_query(conn, prompt, session_id) -> enriched_query
-  |     Append session file context from file_mentions
+run_ingest()
+  |-- [R3] Insert into turns table, then chunk -> embed -> insert chunks
+  |-- [R5] Process subagent transcripts after main transcript
+  |-- [R4] Reuse extract_file_paths() + file_mentions for resource data
+  |-- [R4] Compute/update session centroids (full, recent_5, recent_10)
   |
-  +-- [existing] search_context(conn, embedder, enriched_query, k, session_id)
-  +-- [existing] Write results to stdout
+handle_prompt() -- query preprocessing
+  |-- [R1] classify_query() -> skip trivial prompts
+  |-- [R2] enrich_query() -> augment with file/URL context
+  |
+search_context() -- 8-phase pipeline (PR #28 baseline)
+  |-- [existing] Vector text search (embed -> vector_full_scan on chunks)
+  |-- [existing] File path hybrid search (extract_file_hints -> search_by_file_path)
+  |-- [R4] Access pattern search (centroid -> vector_full_scan on session_access_patterns)
+  |-- [R4] Merge text + file + centroid results
+  |-- [R3] Use turns.full_text directly (no reconstruction)
+  +-- Format output
 ```
-
-### New module: `pipeline/query.rs`
-
-```rust
-#[derive(Debug, PartialEq)]
-pub enum QueryClass {
-    Searchable,
-    Trivial { reason: &'static str },
-}
-
-pub fn classify_query(prompt: &str) -> QueryClass;
-pub fn enrich_query(conn: &Connection, query: &str, session_id: Option<&str>) -> Result<String>;
-```
-
-### Classification rules (applied in order)
-
-1. **Slash commands:** `prompt.trim().starts_with('/')` → `Trivial("slash command")`
-2. **Word count:** Split on whitespace, count < `MIN_QUERY_WORDS` (3)
-   → `Trivial("too short")`
-3. **Acknowledgments:** Case-insensitive exact match against static set
-   ("ok", "okay", "y", "yes", "no", "sure", "thanks", "lgtm", "done",
-   "next", "continue", "go ahead", "proceed", "sounds good", "makes sense",
-   "got it") → `Trivial("acknowledgment")`
-
-### Enrichment strategy
-
-1. Skip if `session_id` is `None` (handles `mementor query` CLI).
-2. Query `file_mentions` for the current session's recently-touched files:
-   ```sql
-   SELECT DISTINCT file_path FROM file_mentions
-   WHERE session_id = ?1 ORDER BY line_index DESC LIMIT ?2
-   ```
-3. Extract filename component only (not full path) to avoid machine-specific
-   noise.
-4. Append: `{query}\n\n[Context: recently touched files: foo.rs, bar.rs]`
-5. If no files found, return query unchanged.
-
-### Integration points
-
-| Location | Change |
-|----------|--------|
-| `crates/mementor-cli/src/hooks/prompt.rs` | Add classification + enrichment before `search_context` |
-| `crates/mementor-cli/src/commands/query.rs` | Add classification only (no session context) |
-
-## Design Constraints
-
-- **No new hooks**: Classification and enrichment happen inside the existing
-  `UserPromptSubmit` hook handler.
-- **No API changes to `search_context`**: It still takes a query string.
-  Preprocessing happens at the call site.
-- **Zero-cost for trivial prompts**: Classification is O(1) pattern matching.
-  No embedding or DB access needed for skipped prompts.
-- **Graceful degradation**: If `file_mentions` table doesn't exist yet
-  (v2 Task 3 not deployed), enrichment returns the original query unchanged.
 
 ## Implementation Plan
 
 | Task | Document | Scope | Depends On |
 |------|----------|-------|------------|
-| 1 | (this document, Part A) | query.rs + config + prompt.rs + query cmd | -- |
-| 2 | (this document, Part B) | query.rs + queries.rs + prompt.rs | v2 Task 3 |
+| 1 | [query-classification](2026-02-19_query-classification.md) | pipeline/query.rs + config + hooks | -- |
+| 2 | [schema-redesign](2026-02-19_schema-redesign.md) | db/schema + queries + ingest + chunker | -- |
+| 3 | [subagent-indexing](2026-02-19_subagent-indexing.md) | pipeline/ingest + db/schema | Task 2 |
+| 4 | [access-pattern-centroids](2026-02-19_access-pattern-centroids.md) | db/schema + queries + ingest + config | Task 2 |
+| 5 | [query-enrichment](2026-02-19_query-enrichment.md) | pipeline/query + queries + hooks | -- |
 
-**Dependency:** Task 1 (classification) is independent. Task 2 (enrichment)
-depends on v2 Task 3 (file_mentions table).
+**Dependency chain:**
 
-## Key Files
+```
+Task 1 (classification) ────────→ independent
 
-| File | Change |
-|------|--------|
-| `crates/mementor-lib/src/pipeline/query.rs` | **NEW**: `classify_query()`, `enrich_query()`, `QueryClass` |
-| `crates/mementor-lib/src/pipeline/mod.rs` | Add `pub mod query;` |
-| `crates/mementor-lib/src/config.rs` | `MIN_QUERY_WORDS`, `MAX_ENRICHMENT_FILES` |
-| `crates/mementor-lib/src/db/queries.rs` | `get_session_file_paths()` |
-| `crates/mementor-cli/src/hooks/prompt.rs` | Classification + enrichment integration |
-| `crates/mementor-cli/src/commands/query.rs` | Classification integration |
+Task 2 (schema redesign) ──┬───→ Task 3 (subagent indexing)
+                            └───→ Task 4 (centroids)
 
-## TODO
+Task 5 (enrichment) ───────────→ independent
+```
 
-### Part A: Query Classification
+Note: v2 Task 3 (`file_mentions` table) was merged in PR #28. Dependencies
+on it are now resolved.
 
-- [ ] Add `MIN_QUERY_WORDS` constant to `config.rs`
-- [ ] Create `crates/mementor-lib/src/pipeline/query.rs`
-- [ ] Add `pub mod query;` to `pipeline/mod.rs`
-- [ ] Implement `QueryClass` enum
-- [ ] Implement `classify_query()` with slash, word-count, acknowledgment rules
-- [ ] Integrate into `handle_prompt` in `prompt.rs` (early return on Trivial)
-- [ ] Integrate into `run_query` in `query.rs` (user-facing message on Trivial)
-- [ ] Add test: `classify_slash_commands`
-- [ ] Add test: `classify_short_prompts`
-- [ ] Add test: `classify_acknowledgments`
-- [ ] Add test: `classify_searchable_prompts`
-- [ ] Add test: `classify_whitespace_handling`
-- [ ] Add test (CLI): `try_run_hook_prompt_trivial_skipped`
-- [ ] Add test (CLI): `try_run_query_trivial_message`
+## Design Constraints
 
-### Part B: Query Enrichment
-
-- [ ] Add `MAX_ENRICHMENT_FILES` constant to `config.rs`
-- [ ] Implement `get_session_file_paths()` in `queries.rs`
-- [ ] Implement `enrich_query()` in `query.rs`
-- [ ] Integrate into `handle_prompt` in `prompt.rs`
-- [ ] Add test: `enrich_query_with_files`
-- [ ] Add test: `enrich_query_no_files`
-- [ ] Add test: `enrich_query_no_session`
-- [ ] Add test: `enrich_query_extracts_filenames`
-- [ ] Add test: `enrich_query_caps_at_max_files`
-- [ ] Add test: `get_session_file_paths_returns_distinct`
-- [ ] Add test: `get_session_file_paths_ordered_by_recency`
-- [ ] Add test (CLI): `try_run_hook_prompt_enriched_search`
-
-### Finalization
-
-- [ ] Verify: clippy + all tests pass
+- **Existing hooks sufficient**: PR #28 added `PreToolUse` and `SubagentStart`
+  hooks. V3 tasks use existing Stop/PreCompact hooks for ingest and
+  `UserPromptSubmit` for query preprocessing. No new hooks needed.
+- **Crash resilient**: Same incremental `last_line_index` pattern. No
+  dependency on `SessionEnd` (which may never fire).
+- **Backward compatible**: DB is regeneratable from transcripts. Migration
+  strategy is clean rebuild -- drop and re-ingest from source JSONL files.
+- **Static linking**: No new native dependencies.
+- **Graceful degradation**: Features work independently. Classification (R1)
+  has no dependencies. Enrichment (R2) degrades to no-op without
+  `file_mentions`. Centroid search (R4) degrades to text-only without file
+  access data. Subagent indexing (R5) is additive.
 
 ## Previous Work
 
-- [recall-quality-v2](2026-02-18_recall-quality-v2.md) — the indexing/storage
-  side improvements that this work complements
-- [improve-recall-quality](2026-02-18_improve-recall-quality.md) — the
-  5-phase post-search filter pipeline
-
-## Estimated Scope
-
-~120 lines of code + ~150 lines of test. No migration needed.
+- [recall-quality-v2](2026-02-18_recall-quality-v2.md) -- indexing/storage
+  side (Tasks 1-3 done, Task 4 pending)
+- [improve-recall-quality](2026-02-18_improve-recall-quality.md) -- 5-phase
+  post-search filter pipeline (now 8-phase after PR #28)
+- [file-aware-hybrid-search](2026-02-19_file-aware-hybrid-search.md) -- v2
+  Task 3 (PR #28, merged). Adds `file_mentions` table, `extract_file_paths()`,
+  `normalize_path()`, `extract_at_mentions()`, hybrid 8-phase search pipeline,
+  `search_file_context()`, PreToolUse and SubagentStart hooks.
+- [hook-based-file-context](2026-02-19_hook-based-file-context.md) -- v2
+  Task 5 (PR #28, merged). PreToolUse and SubagentStart hook handlers.
