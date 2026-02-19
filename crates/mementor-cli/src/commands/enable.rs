@@ -188,7 +188,10 @@ fn upsert_hook_entry(
 
 #[cfg(test)]
 mod tests {
+    use mementor_lib::context::MementorContext;
+    use mementor_lib::db::driver::DatabaseDriver;
     use mementor_lib::output::BufferedIO;
+    use mementor_lib::runtime::Runtime;
 
     use crate::test_util::runtime_in_memory;
     use crate::test_util::trim_margin;
@@ -746,14 +749,9 @@ mod tests {
         );
 
         let wt_dir = tmp.path().join("wt");
-        let ctx = mementor_lib::context::MementorContext::with_cwd_and_log_dir(
-            wt_dir,
-            main_dir.clone(),
-            true,
-            None,
-        );
-        let db = mementor_lib::db::driver::DatabaseDriver::in_memory("enable_reject_wt").unwrap();
-        let runtime = mementor_lib::runtime::Runtime { context: ctx, db };
+        let ctx = MementorContext::with_cwd_and_log_dir(wt_dir, main_dir.clone(), true, None);
+        let db = DatabaseDriver::in_memory("enable_reject_wt").unwrap();
+        let runtime = Runtime { context: ctx, db };
         let mut io = BufferedIO::new();
 
         let result = crate::try_run(&["mementor", "enable"], &runtime, &mut io);
@@ -783,11 +781,9 @@ mod tests {
         std::fs::create_dir_all(&subdir).unwrap();
 
         // is_linked_worktree = false: cwd is inside the primary worktree.
-        let ctx =
-            mementor_lib::context::MementorContext::with_cwd_and_log_dir(subdir, root, false, None);
-        let db =
-            mementor_lib::db::driver::DatabaseDriver::in_memory("enable_primary_subdir").unwrap();
-        let runtime = mementor_lib::runtime::Runtime { context: ctx, db };
+        let ctx = MementorContext::with_cwd_and_log_dir(subdir, root, false, None);
+        let db = DatabaseDriver::in_memory("enable_primary_subdir").unwrap();
+        let runtime = Runtime { context: ctx, db };
         let mut io = BufferedIO::new();
 
         crate::try_run(&["mementor", "enable"], &runtime, &mut io).unwrap();
@@ -821,15 +817,9 @@ mod tests {
         std::fs::create_dir_all(&wt_subdir).unwrap();
 
         // is_linked_worktree = true: cwd is inside a linked worktree.
-        let ctx = mementor_lib::context::MementorContext::with_cwd_and_log_dir(
-            wt_subdir,
-            root.clone(),
-            true,
-            None,
-        );
-        let db =
-            mementor_lib::db::driver::DatabaseDriver::in_memory("enable_reject_wt_subdir").unwrap();
-        let runtime = mementor_lib::runtime::Runtime { context: ctx, db };
+        let ctx = MementorContext::with_cwd_and_log_dir(wt_subdir, root.clone(), true, None);
+        let db = DatabaseDriver::in_memory("enable_reject_wt_subdir").unwrap();
+        let runtime = Runtime { context: ctx, db };
         let mut io = BufferedIO::new();
 
         let result = crate::try_run(&["mementor", "enable"], &runtime, &mut io);

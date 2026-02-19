@@ -88,6 +88,8 @@ WAL mode + `busy_timeout` ensures safe concurrent access.
 - [x] Enforce testing guidelines reference in CLAUDE.md
 - [x] Extract shared `mementor-test-util` crate with `init_git_repo`,
   `run_git`, `assert_paths_eq` — used by both `mementor-lib` and `mementor-cli`
+- [x] Shorten fully-qualified `mementor_lib::` paths in enable guard tests
+  with `use` imports
 
 ## Results
 
