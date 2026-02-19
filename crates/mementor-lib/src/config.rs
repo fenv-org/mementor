@@ -30,3 +30,10 @@ pub const MAX_COSINE_DISTANCE: f64 = 0.45;
 /// threshold, but above typical strong semantic matches (~0.30) so they rank
 /// lower than genuine vector similarity hits.
 pub const FILE_MATCH_DISTANCE: f64 = 0.40;
+
+/// Minimum number of information units for a prompt to be considered searchable.
+///
+/// Prompts with fewer units are classified as trivial and skip recall.
+/// An "information unit" is one whitespace-delimited word for alphabetic scripts,
+/// or one character for logographic scripts (CJK ideographs, kana).
+pub const MIN_QUERY_UNITS: usize = 3;
