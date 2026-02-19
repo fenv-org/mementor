@@ -105,23 +105,13 @@ mod tests {
         let stdout = io.stdout_to_string();
         let output: serde_json::Value = serde_json::from_str(&stdout).unwrap();
         assert_eq!(
-            output["hookSpecificOutput"]["hookEventName"],
-            "SubagentStart"
-        );
-        let additional = output["hookSpecificOutput"]["additionalContext"]
-            .as_str()
-            .unwrap();
-        assert!(
-            additional.contains("Cargo.toml"),
-            "Expected Cargo.toml in output: {additional}"
-        );
-        assert!(
-            additional.contains("src/lib.rs"),
-            "Expected src/lib.rs in output: {additional}"
-        );
-        assert!(
-            additional.contains("src/main.rs"),
-            "Expected src/main.rs in output: {additional}"
+            output,
+            serde_json::json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "SubagentStart",
+                    "additionalContext": "Files recently touched in this session:\n- Cargo.toml\n- src/lib.rs\n- src/main.rs"
+                }
+            })
         );
         assert_eq!(io.stderr_to_string(), "");
     }

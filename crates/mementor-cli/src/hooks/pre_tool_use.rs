@@ -117,17 +117,17 @@ mod tests {
 
         let stdout = io.stdout_to_string();
         let output: serde_json::Value = serde_json::from_str(&stdout).unwrap();
-        assert_eq!(output["hookSpecificOutput"]["hookEventName"], "PreToolUse");
-        let additional = output["hookSpecificOutput"]["additionalContext"]
-            .as_str()
-            .unwrap();
-        assert!(
-            additional.starts_with("## Past context for src/auth.rs"),
-            "Expected header, got: {additional}"
-        );
-        assert!(
-            additional.contains("Refactored the authentication module"),
-            "Expected memory content, got: {additional}"
+        let expected_context = "## Past context for src/auth.rs\n\n\
+                                ### Memory 1\n\
+                                Refactored the authentication module\n\n";
+        assert_eq!(
+            output,
+            serde_json::json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "additionalContext": expected_context
+                }
+            })
         );
         assert_eq!(io.stderr_to_string(), "");
     }
@@ -180,7 +180,18 @@ mod tests {
 
         let stdout = io.stdout_to_string();
         let output: serde_json::Value = serde_json::from_str(&stdout).unwrap();
-        assert_eq!(output["hookSpecificOutput"]["hookEventName"], "PreToolUse");
+        let expected_context = "## Past context for notebooks/analysis.ipynb\n\n\
+                                ### Memory 1\n\
+                                Added data analysis notebook\n\n";
+        assert_eq!(
+            output,
+            serde_json::json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "additionalContext": expected_context
+                }
+            })
+        );
         assert_eq!(io.stderr_to_string(), "");
     }
 
