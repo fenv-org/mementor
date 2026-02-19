@@ -3,6 +3,7 @@ use std::io::{Read, Write};
 use mementor_lib::embedding::embedder::Embedder;
 use mementor_lib::output::ConsoleIO;
 use mementor_lib::pipeline::ingest::search_context;
+use mementor_lib::pipeline::query::{QueryClass, classify_query};
 use mementor_lib::runtime::Runtime;
 
 /// Run the `mementor query` command.
@@ -19,6 +20,11 @@ where
 {
     if !runtime.db.is_ready() {
         anyhow::bail!("mementor is not enabled. Run `mementor enable` first.");
+    }
+
+    if let QueryClass::Trivial { reason } = classify_query(text) {
+        writeln!(io.stdout(), "Recall skipped: {reason}.")?;
+        return Ok(());
     }
 
     let conn = runtime.db.open()?;
@@ -47,7 +53,7 @@ mod tests {
         let (_tmp, runtime) = runtime_in_memory("query_with_results");
         let mut embedder = Embedder::new().unwrap();
 
-        let seed_text = "Hello world";
+        let seed_text = "Implementing authentication in Rust";
         seed_memory(&runtime.db, &mut embedder, "s1", 0, 0, seed_text);
 
         let mut io = BufferedIO::new();
@@ -75,6 +81,39 @@ mod tests {
         .unwrap();
 
         assert_eq!(io.stdout_to_string(), "No matching memories found.\n");
+        assert_eq!(io.stderr_to_string(), "");
+    }
+
+    #[test]
+    fn try_run_query_trivial_slash_command() {
+        let (_tmp, runtime) = runtime_in_memory("query_trivial_slash");
+        let mut io = BufferedIO::new();
+
+        crate::try_run(&["mementor", "query", "/commit"], &runtime, &mut io).unwrap();
+
+        assert_eq!(io.stdout_to_string(), "Recall skipped: slash command.\n");
+        assert_eq!(io.stderr_to_string(), "");
+    }
+
+    #[test]
+    fn try_run_query_trivial_too_short() {
+        let (_tmp, runtime) = runtime_in_memory("query_trivial_short");
+        let mut io = BufferedIO::new();
+
+        crate::try_run(&["mementor", "query", "fix bug"], &runtime, &mut io).unwrap();
+
+        assert_eq!(io.stdout_to_string(), "Recall skipped: too short.\n");
+        assert_eq!(io.stderr_to_string(), "");
+    }
+
+    #[test]
+    fn try_run_query_trivial_too_short_cjk() {
+        let (_tmp, runtime) = runtime_in_memory("query_trivial_cjk");
+        let mut io = BufferedIO::new();
+
+        crate::try_run(&["mementor", "query", "推送"], &runtime, &mut io).unwrap();
+
+        assert_eq!(io.stdout_to_string(), "Recall skipped: too short.\n");
         assert_eq!(io.stderr_to_string(), "");
     }
 

@@ -4,6 +4,7 @@ use mementor_lib::config::DEFAULT_TOP_K;
 use mementor_lib::embedding::embedder::Embedder;
 use mementor_lib::output::ConsoleIO;
 use mementor_lib::pipeline::ingest::search_context;
+use mementor_lib::pipeline::query::{QueryClass, classify_query};
 use mementor_lib::runtime::Runtime;
 use tracing::debug;
 
@@ -29,10 +30,10 @@ where
         "Hook received"
     );
 
-    if input.prompt.is_empty() {
+    if let QueryClass::Trivial { reason } = classify_query(&input.prompt) {
         debug!(
             hook = "UserPromptSubmit",
-            "prompt is empty, skipping recall"
+            reason, "prompt is trivial, skipping recall"
         );
         return Ok(());
     }
@@ -136,6 +137,60 @@ mod tests {
         let stdin_json = serde_json::json!({
             "session_id": "s1",
             "prompt": null,
+            "cwd": "/tmp/project"
+        })
+        .to_string();
+        let mut io = BufferedIO::with_stdin(stdin_json.as_bytes());
+
+        crate::try_run(
+            &["mementor", "hook", "user-prompt-submit"],
+            &runtime,
+            &mut io,
+        )
+        .unwrap();
+
+        assert_eq!(io.stdout_to_string(), "");
+        assert_eq!(io.stderr_to_string(), "");
+    }
+
+    #[test]
+    fn try_run_hook_prompt_trivial_skipped() {
+        let (_tmp, runtime) = runtime_in_memory("hook_prompt_trivial");
+        let mut embedder = Embedder::new().unwrap();
+
+        // Seed a memory with "ok" so without classification it would match
+        // at distance 0.0000. Classification should prevent the search.
+        seed_memory(&runtime.db, &mut embedder, "s1", 0, 0, "ok");
+
+        let stdin_json = serde_json::json!({
+            "session_id": "s2",
+            "prompt": "ok",
+            "cwd": "/tmp/project"
+        })
+        .to_string();
+        let mut io = BufferedIO::with_stdin(stdin_json.as_bytes());
+
+        crate::try_run(
+            &["mementor", "hook", "user-prompt-submit"],
+            &runtime,
+            &mut io,
+        )
+        .unwrap();
+
+        assert_eq!(io.stdout_to_string(), "");
+        assert_eq!(io.stderr_to_string(), "");
+    }
+
+    #[test]
+    fn try_run_hook_prompt_slash_command_skipped() {
+        let (_tmp, runtime) = runtime_in_memory("hook_prompt_slash");
+        let mut embedder = Embedder::new().unwrap();
+
+        seed_memory(&runtime.db, &mut embedder, "s1", 0, 0, "/commit");
+
+        let stdin_json = serde_json::json!({
+            "session_id": "s2",
+            "prompt": "/commit",
             "cwd": "/tmp/project"
         })
         .to_string();
