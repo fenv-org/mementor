@@ -103,3 +103,8 @@ constant. Merge vector + file results via HashMap dedup.
 - [x] Step 6: file hint extraction + tests
 - [x] Step 7: hybrid search in search_context() + search_file_context() + tests
 - [x] Verify: clippy + all tests pass (204 tests total)
+
+## Commits
+
+- `3520d11` — add file-aware hybrid search with path normalization (Steps 1–7)
+- `e2ffbbb` — simplify hook handlers and deduplicate helpers (post-review cleanup)

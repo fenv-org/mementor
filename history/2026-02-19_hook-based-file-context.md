@@ -119,3 +119,8 @@ Register both new hooks in `configure_hooks()`. Update existing enable tests.
 - [x] Step 11: SubagentStart hook handler + tests (4 tests)
 - [x] Step 12: enable command update + tests (all 12 enable tests updated)
 - [x] Verify: clippy + all tests pass (204 tests total)
+
+## Commits
+
+- `532e0e4` — add PreToolUse and SubagentStart hook handlers (Steps 10–12)
+- `e2ffbbb` — simplify hook handlers and deduplicate helpers (post-review cleanup)
