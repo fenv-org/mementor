@@ -126,5 +126,5 @@ Register both new hooks in `configure_hooks()`. Update existing enable tests.
 
 - `532e0e4` — add PreToolUse and SubagentStart hook handlers (Steps 10–12)
 - `e2ffbbb` — simplify hook handlers and deduplicate helpers (post-review cleanup)
-- (pending) — address code review findings: full struct assertions, empty-result
+- `48367a3` — address code review findings: full struct assertions, empty-result
   guard in `search_file_context`, fix ingest CLI `project_root`, sort before dedup
