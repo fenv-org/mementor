@@ -23,3 +23,10 @@ pub const OVER_FETCH_MULTIPLIER: usize = 4;
 /// BGE-small-en-v1.5 cosine distance range: \[0, 2\].
 /// Semantically related content typically falls below 0.40.
 pub const MAX_COSINE_DISTANCE: f64 = 0.45;
+
+/// Synthetic distance assigned to file-path-only matches in hybrid search.
+///
+/// Set below `MAX_COSINE_DISTANCE` (0.45) so file matches survive the distance
+/// threshold, but above typical strong semantic matches (~0.30) so they rank
+/// lower than genuine vector similarity hits.
+pub const FILE_MATCH_DISTANCE: f64 = 0.40;

@@ -257,6 +257,141 @@ pub fn get_turns_chunks(
     Ok(result)
 }
 
+/// Insert a file mention record. Uses INSERT OR IGNORE to skip duplicates.
+pub fn insert_file_mention(
+    conn: &Connection,
+    session_id: &str,
+    line_index: usize,
+    file_path: &str,
+    tool_name: &str,
+) -> anyhow::Result<()> {
+    conn.execute(
+        "INSERT OR IGNORE INTO file_mentions (session_id, line_index, file_path, tool_name)
+         VALUES (?1, ?2, ?3, ?4)",
+        params![session_id, line_index as i64, file_path, tool_name],
+    )
+    .context("Failed to insert file mention")?;
+    Ok(())
+}
+
+/// Delete all file mentions for a session at a specific line index.
+/// Used when re-processing a provisional turn (cascade delete).
+pub fn delete_file_mentions_at(
+    conn: &Connection,
+    session_id: &str,
+    line_index: usize,
+) -> anyhow::Result<usize> {
+    let deleted = conn
+        .execute(
+            "DELETE FROM file_mentions WHERE session_id = ?1 AND line_index = ?2",
+            params![session_id, line_index as i64],
+        )
+        .context("Failed to delete file mentions")?;
+    Ok(deleted)
+}
+
+/// Search for turns that mention any of the given file paths.
+///
+/// Returns `(session_id, line_index)` pairs ranked by match count (descending).
+/// Uses partial path matching (suffix match) so `src/main.rs` matches
+/// `src/main.rs` stored in the table.
+///
+/// When `exclude_session_id` is provided, results from that session are
+/// filtered out unless they fall at or before the `compact_boundary`.
+pub fn search_by_file_path(
+    conn: &Connection,
+    file_paths: &[&str],
+    exclude_session_id: Option<&str>,
+    compact_boundary: Option<usize>,
+    k: usize,
+) -> anyhow::Result<Vec<(String, usize)>> {
+    if file_paths.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Build dynamic SQL with path conditions
+    let mut sql = String::from(
+        "SELECT session_id, line_index, COUNT(DISTINCT file_path) as match_count
+         FROM file_mentions WHERE (",
+    );
+    let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+
+    for (i, path) in file_paths.iter().enumerate() {
+        if i > 0 {
+            sql.push_str(" OR ");
+        }
+        let p = param_values.len() + 1;
+        write!(&mut sql, "file_path = ?{p}").unwrap();
+        param_values.push(Box::new((*path).to_string()));
+    }
+    sql.push(')');
+
+    // In-context filter: exclude current session unless before compact boundary
+    let exclude_param = param_values.len() + 1;
+    let boundary_param = param_values.len() + 2;
+    write!(
+        &mut sql,
+        " AND (?{exclude_param} IS NULL OR session_id != ?{exclude_param} OR (?{boundary_param} IS NOT NULL AND line_index <= ?{boundary_param}))"
+    )
+    .unwrap();
+    param_values.push(Box::new(exclude_session_id.map(String::from)));
+    param_values.push(Box::new(compact_boundary.map(|v| v as i64)));
+
+    let k_param = param_values.len() + 1;
+    write!(
+        &mut sql,
+        " GROUP BY session_id, line_index ORDER BY match_count DESC LIMIT ?{k_param}"
+    )
+    .unwrap();
+    param_values.push(Box::new(k as i64));
+
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> = param_values.iter().map(|p| &**p).collect();
+    let mut stmt = conn
+        .prepare(&sql)
+        .context("Failed to prepare search_by_file_path query")?;
+    let results = stmt
+        .query_map(param_refs.as_slice(), |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as usize))
+        })?
+        .collect::<Result<Vec<_>, _>>()
+        .context("Failed to search by file path")?;
+
+    debug!(
+        file_count = file_paths.len(),
+        result_count = results.len(),
+        "File path search completed"
+    );
+
+    Ok(results)
+}
+
+/// Get recently mentioned file paths for a session, most-recently-touched first.
+pub fn get_recent_file_mentions(
+    conn: &Connection,
+    session_id: &str,
+    limit: usize,
+) -> anyhow::Result<Vec<String>> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT file_path, MAX(line_index) as last_seen
+             FROM file_mentions
+             WHERE session_id = ?1
+             GROUP BY file_path
+             ORDER BY last_seen DESC
+             LIMIT ?2",
+        )
+        .context("Failed to prepare get_recent_file_mentions query")?;
+
+    let results = stmt
+        .query_map(params![session_id, limit as i64], |row| {
+            row.get::<_, String>(0)
+        })?
+        .collect::<Result<Vec<_>, _>>()
+        .context("Failed to query recent file mentions")?;
+
+    Ok(results)
+}
+
 /// Update the compaction boundary for a session.
 ///
 /// Sets `last_compact_line_index` to the current `last_line_index`,
@@ -454,5 +589,152 @@ mod tests {
         let (_tmp, conn) = test_db();
         let result = get_turns_chunks(&conn, &[]).unwrap();
         assert!(result.is_empty());
+    }
+
+    fn seed_session(conn: &Connection, session_id: &str) {
+        let session = Session {
+            session_id: session_id.to_string(),
+            transcript_path: "/tmp/t.jsonl".to_string(),
+            project_dir: "/tmp/p".to_string(),
+            last_line_index: 0,
+            provisional_turn_start: None,
+            last_compact_line_index: None,
+        };
+        upsert_session(conn, &session).unwrap();
+    }
+
+    #[test]
+    fn insert_and_search_file_mentions() {
+        let (_tmp, conn) = test_db();
+        seed_session(&conn, "s1");
+        seed_session(&conn, "s2");
+
+        insert_file_mention(&conn, "s1", 0, "src/main.rs", "Read").unwrap();
+        insert_file_mention(&conn, "s1", 0, "src/lib.rs", "Edit").unwrap();
+        insert_file_mention(&conn, "s2", 4, "src/main.rs", "Write").unwrap();
+
+        let results = search_by_file_path(&conn, &["src/main.rs"], None, None, 10).unwrap();
+        assert_eq!(results, vec![("s1".to_string(), 0), ("s2".to_string(), 4),]);
+    }
+
+    #[test]
+    fn file_search_excludes_in_context() {
+        let (_tmp, conn) = test_db();
+        seed_session(&conn, "s1");
+        seed_session(&conn, "s2");
+
+        insert_file_mention(&conn, "s1", 0, "src/main.rs", "Read").unwrap();
+        insert_file_mention(&conn, "s2", 4, "src/main.rs", "Write").unwrap();
+
+        // Exclude s1: only s2 should appear
+        let results = search_by_file_path(&conn, &["src/main.rs"], Some("s1"), None, 10).unwrap();
+        assert_eq!(results, vec![("s2".to_string(), 4)]);
+    }
+
+    #[test]
+    fn file_search_in_context_with_compact_boundary() {
+        let (_tmp, conn) = test_db();
+        seed_session(&conn, "s1");
+
+        insert_file_mention(&conn, "s1", 2, "src/main.rs", "Read").unwrap();
+        insert_file_mention(&conn, "s1", 8, "src/main.rs", "Edit").unwrap();
+
+        // Exclude s1 but allow entries at or before compact boundary 5
+        let results =
+            search_by_file_path(&conn, &["src/main.rs"], Some("s1"), Some(5), 10).unwrap();
+        assert_eq!(results, vec![("s1".to_string(), 2)]);
+    }
+
+    #[test]
+    fn file_mentions_deleted_with_delete_at() {
+        let (_tmp, conn) = test_db();
+        seed_session(&conn, "s1");
+
+        insert_file_mention(&conn, "s1", 0, "src/main.rs", "Read").unwrap();
+        insert_file_mention(&conn, "s1", 0, "src/lib.rs", "Edit").unwrap();
+        insert_file_mention(&conn, "s1", 4, "src/main.rs", "Write").unwrap();
+
+        let deleted = delete_file_mentions_at(&conn, "s1", 0).unwrap();
+        assert_eq!(deleted, 2);
+
+        // Only line_index=4 should remain
+        let results = search_by_file_path(&conn, &["src/main.rs"], None, None, 10).unwrap();
+        assert_eq!(results, vec![("s1".to_string(), 4)]);
+    }
+
+    #[test]
+    fn file_search_empty_paths_returns_empty() {
+        let (_tmp, conn) = test_db();
+        let results = search_by_file_path(&conn, &[], None, None, 10).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn file_search_multiple_paths_ranked_by_match_count() {
+        let (_tmp, conn) = test_db();
+        seed_session(&conn, "s1");
+
+        // Turn at line 0 mentions both files
+        insert_file_mention(&conn, "s1", 0, "src/main.rs", "Read").unwrap();
+        insert_file_mention(&conn, "s1", 0, "src/lib.rs", "Read").unwrap();
+        // Turn at line 4 mentions only one file
+        insert_file_mention(&conn, "s1", 4, "src/main.rs", "Edit").unwrap();
+
+        let results =
+            search_by_file_path(&conn, &["src/main.rs", "src/lib.rs"], None, None, 10).unwrap();
+        // Turn at line 0 matches both paths (count=2), line 4 matches one (count=1)
+        assert_eq!(results, vec![("s1".to_string(), 0), ("s1".to_string(), 4),]);
+    }
+
+    #[test]
+    fn insert_file_mention_ignores_duplicates() {
+        let (_tmp, conn) = test_db();
+        seed_session(&conn, "s1");
+
+        insert_file_mention(&conn, "s1", 0, "src/main.rs", "Read").unwrap();
+        // Same exact record — should be silently ignored
+        insert_file_mention(&conn, "s1", 0, "src/main.rs", "Read").unwrap();
+
+        let count: i64 = conn
+            .query_row("SELECT count(*) FROM file_mentions", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn get_recent_file_mentions_ordered_by_recency() {
+        let (_tmp, conn) = test_db();
+        seed_session(&conn, "s1");
+
+        insert_file_mention(&conn, "s1", 0, "src/old.rs", "Read").unwrap();
+        insert_file_mention(&conn, "s1", 4, "src/newer.rs", "Edit").unwrap();
+        insert_file_mention(&conn, "s1", 8, "src/newest.rs", "Write").unwrap();
+        // old.rs also touched later
+        insert_file_mention(&conn, "s1", 10, "src/old.rs", "Edit").unwrap();
+
+        let recent = get_recent_file_mentions(&conn, "s1", 10).unwrap();
+        assert_eq!(recent, vec!["src/old.rs", "src/newest.rs", "src/newer.rs",]);
+    }
+
+    #[test]
+    fn get_recent_file_mentions_respects_limit() {
+        let (_tmp, conn) = test_db();
+        seed_session(&conn, "s1");
+
+        insert_file_mention(&conn, "s1", 0, "a.rs", "Read").unwrap();
+        insert_file_mention(&conn, "s1", 2, "b.rs", "Read").unwrap();
+        insert_file_mention(&conn, "s1", 4, "c.rs", "Read").unwrap();
+
+        let recent = get_recent_file_mentions(&conn, "s1", 2).unwrap();
+        assert_eq!(recent, vec!["c.rs", "b.rs"]);
+    }
+
+    #[test]
+    fn get_recent_file_mentions_empty_session() {
+        let (_tmp, conn) = test_db();
+        seed_session(&conn, "s1");
+
+        let recent = get_recent_file_mentions(&conn, "s1", 10).unwrap();
+        assert!(recent.is_empty());
     }
 }

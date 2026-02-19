@@ -40,6 +40,7 @@ where
         session_id,
         transcript_path,
         &project_dir,
+        &project_dir,
     )?;
 
     writeln!(io.stdout(), "Ingestion complete for session {session_id}.")?;

@@ -16,6 +16,8 @@ pub struct Turn {
     pub provisional: bool,
     /// Combined text content of the turn.
     pub text: String,
+    /// Tool summaries from the assistant message (e.g., `["Read(src/main.rs)", "Edit(src/lib.rs)"]`).
+    pub tool_summary: Vec<String>,
 }
 
 /// Group parsed messages into turns.
@@ -60,10 +62,16 @@ pub fn group_into_turns(messages: &[ParsedMessage]) -> Vec<Turn> {
             provisional = false;
         }
 
+        let tool_summary = match &assistant.role {
+            MessageRole::Assistant { tool_summary } => tool_summary.clone(),
+            MessageRole::User => vec![],
+        };
+
         turns.push(Turn {
             line_index: user.line_index,
             provisional,
             text,
+            tool_summary,
         });
     }
 
@@ -181,6 +189,7 @@ mod tests {
                 line_index: 0,
                 provisional: true,
                 text: "[User] Hello\n\n[Assistant] Hi there".to_string(),
+                tool_summary: vec![],
             }]
         );
     }
@@ -200,11 +209,13 @@ mod tests {
                     line_index: 0,
                     provisional: false,
                     text: "[User] Q1\n\n[Assistant] A1\n\n[User] Q2".to_string(),
+                    tool_summary: vec![],
                 },
                 Turn {
                     line_index: 2,
                     provisional: true,
                     text: "[User] Q2\n\n[Assistant] A2".to_string(),
+                    tool_summary: vec![],
                 },
             ]
         );
@@ -227,16 +238,19 @@ mod tests {
                     line_index: 0,
                     provisional: false,
                     text: "[User] Q1\n\n[Assistant] A1\n\n[User] Q2".to_string(),
+                    tool_summary: vec![],
                 },
                 Turn {
                     line_index: 2,
                     provisional: false,
                     text: "[User] Q2\n\n[Assistant] A2\n\n[User] Q3".to_string(),
+                    tool_summary: vec![],
                 },
                 Turn {
                     line_index: 4,
                     provisional: true,
                     text: "[User] Q3\n\n[Assistant] A3".to_string(),
+                    tool_summary: vec![],
                 },
             ]
         );
@@ -255,6 +269,7 @@ mod tests {
             line_index: 0,
             provisional: false,
             text: "Short text that fits in one chunk.".to_string(),
+            tool_summary: vec![],
         };
         let chunks = chunk_turn(&turn, &tokenizer);
         assert_eq!(chunks.len(), 1);
@@ -270,6 +285,7 @@ mod tests {
             line_index: 0,
             provisional: false,
             text: long_text,
+            tool_summary: vec![],
         };
         let chunks = chunk_turn(&turn, &tokenizer);
         assert!(
@@ -292,6 +308,7 @@ mod tests {
             line_index: 0,
             provisional: false,
             text: long_text,
+            tool_summary: vec![],
         };
         let chunks = chunk_turn(&turn, &tokenizer);
         if chunks.len() > 1 {
@@ -356,11 +373,13 @@ mod tests {
                     line_index: 5,
                     provisional: false,
                     text: "[User] Q1\n\n[Assistant] A1\n\n[User] Q2".to_string(),
+                    tool_summary: vec![],
                 },
                 Turn {
                     line_index: 10,
                     provisional: true,
                     text: "[User] Q2\n\n[Assistant] A2".to_string(),
+                    tool_summary: vec![],
                 },
             ]
         );
@@ -408,11 +427,16 @@ mod tests {
                            [Tools] Edit(.github/workflows/ci.yml) | Bash(cmd=\"cargo test\")\n\n\
                            [User] That works!"
                         .to_string(),
+                    tool_summary: vec![
+                        "Edit(.github/workflows/ci.yml)".to_string(),
+                        "Bash(cmd=\"cargo test\")".to_string(),
+                    ],
                 },
                 Turn {
                     line_index: 2,
                     provisional: true,
                     text: "[User] That works!\n\n[Assistant] Great.".to_string(),
+                    tool_summary: vec![],
                 },
             ]
         );
@@ -427,6 +451,7 @@ mod tests {
                 line_index: 0,
                 provisional: true,
                 text: "[User] Hello\n\n[Assistant] Hi there".to_string(),
+                tool_summary: vec![],
             }]
         );
     }
