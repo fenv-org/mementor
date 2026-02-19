@@ -17,11 +17,12 @@ use tracing::{debug, info};
 use crate::config::{FILE_MATCH_DISTANCE, MAX_COSINE_DISTANCE, OVER_FETCH_MULTIPLIER};
 use crate::db::queries::{
     self, Session, delete_file_mentions_at, delete_memories_at, get_turns_chunks,
-    insert_file_mention, insert_memory, search_by_file_path, search_memories, upsert_session,
+    insert_file_mention, insert_memory, insert_pr_link, search_by_file_path, search_memories,
+    upsert_session,
 };
 use crate::embedding::embedder::Embedder;
 use crate::pipeline::chunker::{chunk_turn, group_into_turns};
-use crate::transcript::parser::parse_transcript;
+use crate::transcript::parser::{ParseResult, parse_transcript};
 
 /// Normalize a file path to a relative path from the project root.
 ///
@@ -232,14 +233,15 @@ pub fn run_ingest(
     // Parse new messages from the transcript starting at start_line.
     // If there's a provisional turn, re-read from its start to re-process it.
     let read_from = provisional_start.unwrap_or(start_line);
-    let messages = parse_transcript(transcript_path, read_from)?;
+    let ParseResult { messages, pr_links } = parse_transcript(transcript_path, read_from)?;
     debug!(
         session_id = %session_id,
         read_from = read_from,
         message_count = messages.len(),
+        pr_link_count = pr_links.len(),
         "Parsed transcript messages"
     );
-    if messages.is_empty() {
+    if messages.is_empty() && pr_links.is_empty() {
         debug!("No new messages found in transcript");
         return Ok(());
     }
@@ -261,11 +263,6 @@ pub fn run_ingest(
             "Turn detail"
         );
     }
-    if turns.is_empty() {
-        debug!("No turns formed from messages");
-        return Ok(());
-    }
-
     // Ensure session record exists (required for foreign key on memories table)
     if session.is_none() {
         upsert_session(
@@ -279,6 +276,30 @@ pub fn run_ingest(
                 last_compact_line_index: None,
             },
         )?;
+    }
+
+    // Insert PR links (idempotent via INSERT OR IGNORE)
+    for pr_link in &pr_links {
+        insert_pr_link(
+            conn,
+            session_id,
+            pr_link.pr_number,
+            &pr_link.pr_url,
+            &pr_link.pr_repository,
+            &pr_link.timestamp,
+        )?;
+    }
+    if !pr_links.is_empty() {
+        debug!(
+            session_id = %session_id,
+            count = pr_links.len(),
+            "Inserted PR links"
+        );
+    }
+
+    if turns.is_empty() {
+        debug!("No turns formed from messages");
+        return Ok(());
     }
 
     // If a provisional turn existed, delete its old chunks and file mentions
@@ -317,13 +338,18 @@ pub fn run_ingest(
         })?;
 
         // Store each chunk with its embedding
+        let role = if turn.is_compaction_summary {
+            "compaction_summary"
+        } else {
+            "turn"
+        };
         for (chunk, embedding) in chunks.iter().zip(embeddings.iter()) {
             insert_memory(
                 conn,
                 session_id,
                 chunk.line_index,
                 chunk.chunk_index,
-                "turn",
+                role,
                 &chunk.text,
                 embedding,
             )?;
@@ -492,28 +518,15 @@ pub fn search_context(
     // Add vector results (best distance per turn)
     for result in &after_threshold {
         let key = (result.session_id.clone(), result.line_index);
-        merged
-            .entry(key)
-            .and_modify(|d| {
-                if result.distance < *d {
-                    *d = result.distance;
-                }
-            })
-            .or_insert(result.distance);
+        let d = merged.entry(key).or_insert(f64::MAX);
+        *d = d.min(result.distance);
     }
 
-    // Add file results
+    // Add file results (keep the lower distance if vector match already exists)
     for (sid, line_idx) in &file_results {
         let key = (sid.clone(), *line_idx);
-        merged
-            .entry(key)
-            .and_modify(|d| {
-                // Keep the lower distance (vector match is better than synthetic)
-                if FILE_MATCH_DISTANCE < *d {
-                    *d = FILE_MATCH_DISTANCE;
-                }
-            })
-            .or_insert(FILE_MATCH_DISTANCE);
+        let d = merged.entry(key).or_insert(f64::MAX);
+        *d = d.min(FILE_MATCH_DISTANCE);
     }
 
     debug!(merged_count = merged.len(), "Phase 6: merge results");
@@ -571,7 +584,7 @@ pub fn search_context(
         .unwrap();
     }
 
-    if ctx == "## Relevant past context\n\n" {
+    if ctx.len() == "## Relevant past context\n\n".len() {
         return Ok(String::new());
     }
 
@@ -609,7 +622,8 @@ pub fn search_file_context(
     let turn_texts = get_turns_chunks(conn, &turn_keys)?;
 
     let header = format!("## Past context for {normalized}\n\n");
-    let mut ctx = header.clone();
+    let header_len = header.len();
+    let mut ctx = header;
     for (i, (sid, line_idx)) in results.iter().enumerate() {
         let key = (sid.clone(), *line_idx);
         let full_text = turn_texts
@@ -623,7 +637,7 @@ pub fn search_file_context(
         write!(&mut ctx, "### Memory {}\n{}\n\n", i + 1, full_text).unwrap();
     }
 
-    if ctx == header {
+    if ctx.len() == header_len {
         return Ok(String::new());
     }
 
@@ -635,7 +649,7 @@ mod tests {
     use super::*;
     use crate::db::driver::DatabaseDriver;
     use crate::pipeline::chunker::load_tokenizer;
-    use std::io::Write;
+    use mementor_test_util::transcript::{make_entry, make_pr_link_entry, write_transcript};
 
     fn setup_test() -> (tempfile::TempDir, Connection, Embedder, Tokenizer) {
         let tmp = tempfile::tempdir().unwrap();
@@ -645,39 +659,6 @@ mod tests {
         let embedder = Embedder::new().unwrap();
         let tokenizer = load_tokenizer().unwrap();
         (tmp, conn, embedder, tokenizer)
-    }
-
-    fn write_transcript(dir: &Path, lines: &[&str]) -> std::path::PathBuf {
-        let path = dir.join("transcript.jsonl");
-        let mut f = std::fs::File::create(&path).unwrap();
-        for line in lines {
-            writeln!(f, "{line}").unwrap();
-        }
-        path
-    }
-
-    fn make_entry(role: &str, text: &str) -> String {
-        serde_json::json!({
-            "type": "message",
-            "uuid": format!("uuid-{}", rand_id()),
-            "sessionId": "test-session",
-            "timestamp": "2026-01-01T00:00:00Z",
-            "message": {
-                "role": role,
-                "content": text
-            }
-        })
-        .to_string()
-    }
-
-    fn rand_id() -> u64 {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-        use std::time::SystemTime;
-        let mut h = DefaultHasher::new();
-        SystemTime::now().hash(&mut h);
-        std::thread::current().id().hash(&mut h);
-        h.finish()
     }
 
     #[test]
@@ -1326,5 +1307,129 @@ mod tests {
             memory_count <= 2,
             "Expected at most 2 results, got {memory_count}"
         );
+    }
+
+    #[test]
+    fn ingest_stores_pr_links() {
+        let (tmp, conn, mut embedder, tokenizer) = setup_test();
+
+        let lines = vec![
+            make_entry("user", "Hello"),
+            make_entry("assistant", "Hi there"),
+            make_pr_link_entry(
+                "s1",
+                14,
+                "https://github.com/fenv-org/mementor/pull/14",
+                "fenv-org/mementor",
+            ),
+        ];
+        let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+        let transcript = write_transcript(tmp.path(), &refs);
+
+        run_ingest(
+            &conn,
+            &mut embedder,
+            &tokenizer,
+            "s1",
+            &transcript,
+            "/tmp/p",
+            "/tmp/p",
+        )
+        .unwrap();
+
+        assert_eq!(
+            queries::get_pr_links_for_session(&conn, "s1").unwrap(),
+            vec![queries::PrLink {
+                session_id: "s1".to_string(),
+                pr_number: 14,
+                pr_url: "https://github.com/fenv-org/mementor/pull/14".to_string(),
+                pr_repository: "fenv-org/mementor".to_string(),
+                timestamp: "2026-02-17T00:00:00Z".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn compaction_summary_stored_with_role() {
+        let (tmp, conn, mut embedder, tokenizer) = setup_test();
+
+        let prefix = crate::config::COMPACTION_SUMMARY_PREFIX;
+        let summary_text = format!("{prefix}. The previous session explored Rust error handling.");
+
+        let lines = vec![
+            make_entry("user", &summary_text),
+            make_entry("assistant", "I understand the context."),
+        ];
+        let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+        let transcript = write_transcript(tmp.path(), &refs);
+
+        run_ingest(
+            &conn,
+            &mut embedder,
+            &tokenizer,
+            "s1",
+            &transcript,
+            "/tmp/p",
+            "/tmp/p",
+        )
+        .unwrap();
+
+        let role: String = conn
+            .query_row(
+                "SELECT role FROM memories WHERE session_id = 's1' AND line_index = 0 LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(role, "compaction_summary");
+    }
+
+    #[test]
+    fn pr_link_reingest_is_idempotent() {
+        let (tmp, conn, mut embedder, tokenizer) = setup_test();
+
+        let lines = vec![
+            make_entry("user", "Hello"),
+            make_entry("assistant", "Hi"),
+            make_pr_link_entry(
+                "s1",
+                14,
+                "https://github.com/fenv-org/mementor/pull/14",
+                "fenv-org/mementor",
+            ),
+        ];
+        let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+        let transcript = write_transcript(tmp.path(), &refs);
+
+        // Ingest twice
+        run_ingest(
+            &conn,
+            &mut embedder,
+            &tokenizer,
+            "s1",
+            &transcript,
+            "/tmp/p",
+            "/tmp/p",
+        )
+        .unwrap();
+        run_ingest(
+            &conn,
+            &mut embedder,
+            &tokenizer,
+            "s1",
+            &transcript,
+            "/tmp/p",
+            "/tmp/p",
+        )
+        .unwrap();
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM pr_links WHERE session_id = 's1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
     }
 }

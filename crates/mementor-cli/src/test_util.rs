@@ -1,5 +1,4 @@
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::path::PathBuf;
 
 use mementor_lib::context::MementorContext;
 use mementor_lib::db::driver::DatabaseDriver;
@@ -7,8 +6,8 @@ use mementor_lib::db::queries::{Session, insert_memory, upsert_session};
 use mementor_lib::embedding::embedder::Embedder;
 use mementor_lib::runtime::Runtime;
 
-/// Counter for generating deterministic, unique UUIDs in test transcript entries.
-static ENTRY_COUNTER: AtomicUsize = AtomicUsize::new(0);
+// Re-export shared transcript helpers from mementor-test-util.
+pub use mementor_test_util::transcript::{make_entry, make_pr_link_entry, write_transcript};
 
 /// Create a [`Runtime`] with an in-memory database and a tempdir-based context.
 ///
@@ -75,38 +74,6 @@ pub fn seed_memory(
         &embeddings[0],
     )
     .unwrap();
-}
-
-/// Build a single JSONL transcript entry for a given role and text.
-///
-/// Returns a JSON string suitable for writing to a transcript file.
-/// Each call produces a unique UUID via an atomic counter.
-pub fn make_entry(role: &str, text: &str) -> String {
-    let id = ENTRY_COUNTER.fetch_add(1, Ordering::Relaxed);
-    serde_json::json!({
-        "type": "message",
-        "uuid": format!("uuid-{id}"),
-        "sessionId": "test-session",
-        "timestamp": "2026-01-01T00:00:00Z",
-        "message": {
-            "role": role,
-            "content": text
-        }
-    })
-    .to_string()
-}
-
-/// Write JSONL lines to a transcript file in the given directory.
-///
-/// Returns the path to the created `transcript.jsonl` file.
-pub fn write_transcript(dir: &Path, lines: &[&str]) -> PathBuf {
-    use std::io::Write;
-    let path = dir.join("transcript.jsonl");
-    let mut f = std::fs::File::create(&path).unwrap();
-    for line in lines {
-        writeln!(f, "{line}").unwrap();
-    }
-    path
 }
 
 /// Strip margin markers from a multi-line string (Kotlin-style `trimMargin`).

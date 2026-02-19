@@ -44,6 +44,17 @@ fn migrations() -> Migrations<'static> {
             );
             CREATE INDEX idx_file_mentions_path ON file_mentions(file_path);",
         ),
+        // v4: PR links table for metadata-driven recall
+        M::up(
+            "CREATE TABLE pr_links (
+                session_id    TEXT NOT NULL REFERENCES sessions(session_id),
+                pr_number     INTEGER NOT NULL,
+                pr_url        TEXT NOT NULL,
+                pr_repository TEXT NOT NULL,
+                timestamp     TEXT NOT NULL,
+                UNIQUE(session_id, pr_number)
+            );",
+        ),
     ])
 }
 
@@ -325,28 +336,62 @@ mod tests {
     }
 
     #[test]
-    fn zero_to_v3_fresh_install() {
+    fn v3_to_v4_migration_preserves_data() {
         let mut conn = Connection::open_in_memory().unwrap();
-        apply_migrations(&mut conn).unwrap();
 
-        // Verify all three tables exist
-        let table_count: i64 = conn
-            .query_row(
-                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('sessions', 'memories', 'file_mentions')",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(table_count, 3);
+        // Apply v1 + v2 + v3 migrations only
+        let v3 = Migrations::new(vec![
+            M::up(
+                "CREATE TABLE sessions (
+                    session_id                TEXT PRIMARY KEY,
+                    transcript_path           TEXT NOT NULL,
+                    project_dir               TEXT NOT NULL,
+                    last_line_index           INTEGER NOT NULL DEFAULT 0,
+                    provisional_turn_start    INTEGER,
+                    created_at                TEXT NOT NULL DEFAULT (datetime('now')),
+                    updated_at                TEXT NOT NULL DEFAULT (datetime('now'))
+                );
+                CREATE TABLE memories (
+                    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id       TEXT NOT NULL REFERENCES sessions(session_id),
+                    line_index       INTEGER NOT NULL,
+                    chunk_index      INTEGER NOT NULL,
+                    role             TEXT NOT NULL,
+                    content          TEXT NOT NULL,
+                    embedding        BLOB,
+                    created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+                    UNIQUE(session_id, line_index, chunk_index)
+                );
+                CREATE INDEX idx_memories_session
+                    ON memories(session_id, line_index);",
+            ),
+            M::up("ALTER TABLE sessions ADD COLUMN last_compact_line_index INTEGER;"),
+            M::up(
+                "CREATE TABLE file_mentions (
+                    session_id   TEXT NOT NULL REFERENCES sessions(session_id),
+                    line_index   INTEGER NOT NULL,
+                    file_path    TEXT NOT NULL,
+                    tool_name    TEXT NOT NULL,
+                    UNIQUE(session_id, line_index, file_path, tool_name)
+                );
+                CREATE INDEX idx_file_mentions_path ON file_mentions(file_path);",
+            ),
+        ]);
+        v3.to_latest(&mut conn).unwrap();
 
-        // Verify file_mentions has correct columns and constraints
+        // Insert v3 data
         conn.execute(
-            "INSERT INTO sessions (session_id, transcript_path, project_dir, last_line_index)
-             VALUES ('s1', '/tmp/t.jsonl', '/tmp/p', 0)",
+            "INSERT INTO sessions (session_id, transcript_path, project_dir, last_line_index, last_compact_line_index)
+             VALUES ('s1', '/tmp/t.jsonl', '/tmp/p', 10, 5)",
             [],
         )
         .unwrap();
-
+        conn.execute(
+            "INSERT INTO memories (session_id, line_index, chunk_index, role, content)
+             VALUES ('s1', 0, 0, 'turn', 'hello world')",
+            [],
+        )
+        .unwrap();
         conn.execute(
             "INSERT INTO file_mentions (session_id, line_index, file_path, tool_name)
              VALUES ('s1', 0, 'src/main.rs', 'Read')",
@@ -354,37 +399,101 @@ mod tests {
         )
         .unwrap();
 
-        // UNIQUE constraint: duplicate insert should be ignored with INSERT OR IGNORE
+        // Apply all migrations (v1+v2+v3 already done, so only v4 runs)
+        apply_migrations(&mut conn).unwrap();
+
+        // Verify existing data is preserved
+        let (sid, line_idx, compact_idx): (String, i64, Option<i64>) = conn
+            .query_row(
+                "SELECT session_id, last_line_index, last_compact_line_index FROM sessions WHERE session_id = 's1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(sid, "s1");
+        assert_eq!(line_idx, 10);
+        assert_eq!(compact_idx, Some(5));
+
+        // Verify memories data is preserved
+        let mem_content: String = conn
+            .query_row(
+                "SELECT content FROM memories WHERE session_id = 's1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(mem_content, "hello world");
+
+        // Verify file_mentions data is preserved
+        let fm_count: i64 = conn
+            .query_row("SELECT count(*) FROM file_mentions", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(fm_count, 1);
+
+        // Verify pr_links table exists and is usable
+        conn.execute(
+            "INSERT INTO pr_links (session_id, pr_number, pr_url, pr_repository, timestamp)
+             VALUES ('s1', 14, 'https://github.com/fenv-org/mementor/pull/14', 'fenv-org/mementor', '2026-02-17T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        let pr_count: i64 = conn
+            .query_row("SELECT count(*) FROM pr_links", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(pr_count, 1);
+    }
+
+    #[test]
+    fn zero_to_v4_fresh_install() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        apply_migrations(&mut conn).unwrap();
+
+        // Verify all four tables exist
+        let table_count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('sessions', 'memories', 'file_mentions', 'pr_links')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(table_count, 4);
+
+        // Seed a session for FK constraints
+        conn.execute(
+            "INSERT INTO sessions (session_id, transcript_path, project_dir, last_line_index)
+             VALUES ('s1', '/tmp/t.jsonl', '/tmp/p', 0)",
+            [],
+        )
+        .unwrap();
+
+        // Verify pr_links UNIQUE constraint
+        conn.execute(
+            "INSERT INTO pr_links (session_id, pr_number, pr_url, pr_repository, timestamp)
+             VALUES ('s1', 14, 'https://github.com/fenv-org/mementor/pull/14', 'fenv-org/mementor', '2026-02-17T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+
         let changed = conn
             .execute(
-                "INSERT OR IGNORE INTO file_mentions (session_id, line_index, file_path, tool_name)
-                 VALUES ('s1', 0, 'src/main.rs', 'Read')",
+                "INSERT OR IGNORE INTO pr_links (session_id, pr_number, pr_url, pr_repository, timestamp)
+                 VALUES ('s1', 14, 'https://github.com/fenv-org/mementor/pull/14', 'fenv-org/mementor', '2026-02-17T00:00:00Z')",
                 [],
             )
             .unwrap();
         assert_eq!(changed, 0);
 
-        // Different tool_name for same path is allowed
+        // Different pr_number for same session is allowed
         conn.execute(
-            "INSERT INTO file_mentions (session_id, line_index, file_path, tool_name)
-             VALUES ('s1', 0, 'src/main.rs', 'Edit')",
+            "INSERT INTO pr_links (session_id, pr_number, pr_url, pr_repository, timestamp)
+             VALUES ('s1', 15, 'https://github.com/fenv-org/mementor/pull/15', 'fenv-org/mementor', '2026-02-17T01:00:00Z')",
             [],
         )
         .unwrap();
 
         let count: i64 = conn
-            .query_row("SELECT count(*) FROM file_mentions", [], |row| row.get(0))
+            .query_row("SELECT count(*) FROM pr_links", [], |row| row.get(0))
             .unwrap();
         assert_eq!(count, 2);
-
-        // Verify index exists
-        let idx_count: i64 = conn
-            .query_row(
-                "SELECT count(*) FROM sqlite_master WHERE type='index' AND name='idx_file_mentions_path'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(idx_count, 1);
     }
 }

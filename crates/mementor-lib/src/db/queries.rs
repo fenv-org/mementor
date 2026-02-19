@@ -391,6 +391,63 @@ pub fn get_recent_file_mentions(
     Ok(results)
 }
 
+/// A PR link associated with a session.
+#[derive(Debug, PartialEq)]
+pub struct PrLink {
+    pub session_id: String,
+    pub pr_number: u32,
+    pub pr_url: String,
+    pub pr_repository: String,
+    pub timestamp: String,
+}
+
+/// Insert a PR link for a session. Uses INSERT OR IGNORE for idempotency.
+pub fn insert_pr_link(
+    conn: &Connection,
+    session_id: &str,
+    pr_number: u32,
+    pr_url: &str,
+    pr_repository: &str,
+    timestamp: &str,
+) -> anyhow::Result<()> {
+    conn.execute(
+        "INSERT OR IGNORE INTO pr_links (session_id, pr_number, pr_url, pr_repository, timestamp)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![session_id, pr_number, pr_url, pr_repository, timestamp],
+    )
+    .context("Failed to insert PR link")?;
+    Ok(())
+}
+
+/// Get all PR links for a session, ordered by `pr_number` ascending.
+pub fn get_pr_links_for_session(
+    conn: &Connection,
+    session_id: &str,
+) -> anyhow::Result<Vec<PrLink>> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT session_id, pr_number, pr_url, pr_repository, timestamp
+             FROM pr_links WHERE session_id = ?1
+             ORDER BY pr_number ASC",
+        )
+        .context("Failed to prepare get_pr_links_for_session query")?;
+
+    let results = stmt
+        .query_map(params![session_id], |row| {
+            Ok(PrLink {
+                session_id: row.get(0)?,
+                pr_number: row.get(1)?,
+                pr_url: row.get(2)?,
+                pr_repository: row.get(3)?,
+                timestamp: row.get(4)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()
+        .context("Failed to query PR links")?;
+
+    Ok(results)
+}
+
 /// Update the compaction boundary for a session.
 ///
 /// Sets `last_compact_line_index` to the current `last_line_index`,
@@ -735,5 +792,92 @@ mod tests {
 
         let recent = get_recent_file_mentions(&conn, "s1", 10).unwrap();
         assert!(recent.is_empty());
+    }
+
+    #[test]
+    fn insert_and_get_pr_links() {
+        let (_tmp, conn) = test_db();
+        seed_session(&conn, "s1");
+
+        insert_pr_link(
+            &conn,
+            "s1",
+            14,
+            "https://github.com/fenv-org/mementor/pull/14",
+            "fenv-org/mementor",
+            "2026-02-17T00:00:00Z",
+        )
+        .unwrap();
+        insert_pr_link(
+            &conn,
+            "s1",
+            15,
+            "https://github.com/fenv-org/mementor/pull/15",
+            "fenv-org/mementor",
+            "2026-02-18T00:00:00Z",
+        )
+        .unwrap();
+
+        assert_eq!(
+            get_pr_links_for_session(&conn, "s1").unwrap(),
+            vec![
+                PrLink {
+                    session_id: "s1".to_string(),
+                    pr_number: 14,
+                    pr_url: "https://github.com/fenv-org/mementor/pull/14".to_string(),
+                    pr_repository: "fenv-org/mementor".to_string(),
+                    timestamp: "2026-02-17T00:00:00Z".to_string(),
+                },
+                PrLink {
+                    session_id: "s1".to_string(),
+                    pr_number: 15,
+                    pr_url: "https://github.com/fenv-org/mementor/pull/15".to_string(),
+                    pr_repository: "fenv-org/mementor".to_string(),
+                    timestamp: "2026-02-18T00:00:00Z".to_string(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn insert_pr_link_idempotent() {
+        let (_tmp, conn) = test_db();
+        seed_session(&conn, "s1");
+
+        insert_pr_link(
+            &conn,
+            "s1",
+            14,
+            "https://github.com/fenv-org/mementor/pull/14",
+            "fenv-org/mementor",
+            "2026-02-17T00:00:00Z",
+        )
+        .unwrap();
+        // Insert same link again — should be silently ignored
+        insert_pr_link(
+            &conn,
+            "s1",
+            14,
+            "https://github.com/fenv-org/mementor/pull/14",
+            "fenv-org/mementor",
+            "2026-02-17T00:00:00Z",
+        )
+        .unwrap();
+
+        let count: i64 = conn
+            .query_row("SELECT count(*) FROM pr_links", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn get_pr_links_empty_session() {
+        let (_tmp, conn) = test_db();
+        seed_session(&conn, "s1");
+
+        assert_eq!(
+            get_pr_links_for_session(&conn, "s1").unwrap(),
+            Vec::<PrLink>::new()
+        );
     }
 }
