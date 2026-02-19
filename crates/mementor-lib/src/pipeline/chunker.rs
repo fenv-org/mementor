@@ -18,6 +18,8 @@ pub struct Turn {
     pub text: String,
     /// Tool summaries from the assistant message (e.g., `["Read(src/main.rs)", "Edit(src/lib.rs)"]`).
     pub tool_summary: Vec<String>,
+    /// Whether this turn's user message is a compaction summary.
+    pub is_compaction_summary: bool,
 }
 
 /// Group parsed messages into turns.
@@ -72,6 +74,7 @@ pub fn group_into_turns(messages: &[ParsedMessage]) -> Vec<Turn> {
             provisional,
             text,
             tool_summary,
+            is_compaction_summary: user.is_compaction_summary,
         });
     }
 
@@ -176,6 +179,7 @@ mod tests {
                     },
                     _ => panic!("Invalid role: {role}"),
                 },
+                is_compaction_summary: false,
             })
             .collect()
     }
@@ -190,6 +194,7 @@ mod tests {
                 provisional: true,
                 text: "[User] Hello\n\n[Assistant] Hi there".to_string(),
                 tool_summary: vec![],
+                is_compaction_summary: false,
             }]
         );
     }
@@ -210,12 +215,14 @@ mod tests {
                     provisional: false,
                     text: "[User] Q1\n\n[Assistant] A1\n\n[User] Q2".to_string(),
                     tool_summary: vec![],
+                    is_compaction_summary: false,
                 },
                 Turn {
                     line_index: 2,
                     provisional: true,
                     text: "[User] Q2\n\n[Assistant] A2".to_string(),
                     tool_summary: vec![],
+                    is_compaction_summary: false,
                 },
             ]
         );
@@ -239,18 +246,21 @@ mod tests {
                     provisional: false,
                     text: "[User] Q1\n\n[Assistant] A1\n\n[User] Q2".to_string(),
                     tool_summary: vec![],
+                    is_compaction_summary: false,
                 },
                 Turn {
                     line_index: 2,
                     provisional: false,
                     text: "[User] Q2\n\n[Assistant] A2\n\n[User] Q3".to_string(),
                     tool_summary: vec![],
+                    is_compaction_summary: false,
                 },
                 Turn {
                     line_index: 4,
                     provisional: true,
                     text: "[User] Q3\n\n[Assistant] A3".to_string(),
                     tool_summary: vec![],
+                    is_compaction_summary: false,
                 },
             ]
         );
@@ -270,6 +280,7 @@ mod tests {
             provisional: false,
             text: "Short text that fits in one chunk.".to_string(),
             tool_summary: vec![],
+            is_compaction_summary: false,
         };
         let chunks = chunk_turn(&turn, &tokenizer);
         assert_eq!(chunks.len(), 1);
@@ -286,6 +297,7 @@ mod tests {
             provisional: false,
             text: long_text,
             tool_summary: vec![],
+            is_compaction_summary: false,
         };
         let chunks = chunk_turn(&turn, &tokenizer);
         assert!(
@@ -309,6 +321,7 @@ mod tests {
             provisional: false,
             text: long_text,
             tool_summary: vec![],
+            is_compaction_summary: false,
         };
         let chunks = chunk_turn(&turn, &tokenizer);
         if chunks.len() > 1 {
@@ -345,6 +358,7 @@ mod tests {
                 line_index: 5,
                 text: "Q1".to_string(),
                 role: MessageRole::User,
+                is_compaction_summary: false,
             },
             ParsedMessage {
                 line_index: 6,
@@ -352,11 +366,13 @@ mod tests {
                 role: MessageRole::Assistant {
                     tool_summary: vec![],
                 },
+                is_compaction_summary: false,
             },
             ParsedMessage {
                 line_index: 10,
                 text: "Q2".to_string(),
                 role: MessageRole::User,
+                is_compaction_summary: false,
             },
             ParsedMessage {
                 line_index: 11,
@@ -364,6 +380,7 @@ mod tests {
                 role: MessageRole::Assistant {
                     tool_summary: vec![],
                 },
+                is_compaction_summary: false,
             },
         ];
         assert_eq!(
@@ -374,12 +391,14 @@ mod tests {
                     provisional: false,
                     text: "[User] Q1\n\n[Assistant] A1\n\n[User] Q2".to_string(),
                     tool_summary: vec![],
+                    is_compaction_summary: false,
                 },
                 Turn {
                     line_index: 10,
                     provisional: true,
                     text: "[User] Q2\n\n[Assistant] A2".to_string(),
                     tool_summary: vec![],
+                    is_compaction_summary: false,
                 },
             ]
         );
@@ -392,6 +411,7 @@ mod tests {
                 line_index: 0,
                 text: "Fix CI".to_string(),
                 role: MessageRole::User,
+                is_compaction_summary: false,
             },
             ParsedMessage {
                 line_index: 1,
@@ -402,11 +422,13 @@ mod tests {
                         "Bash(cmd=\"cargo test\")".to_string(),
                     ],
                 },
+                is_compaction_summary: false,
             },
             ParsedMessage {
                 line_index: 2,
                 text: "That works!".to_string(),
                 role: MessageRole::User,
+                is_compaction_summary: false,
             },
             ParsedMessage {
                 line_index: 3,
@@ -414,6 +436,7 @@ mod tests {
                 role: MessageRole::Assistant {
                     tool_summary: vec![],
                 },
+                is_compaction_summary: false,
             },
         ];
         assert_eq!(
@@ -431,12 +454,14 @@ mod tests {
                         "Edit(.github/workflows/ci.yml)".to_string(),
                         "Bash(cmd=\"cargo test\")".to_string(),
                     ],
+                    is_compaction_summary: false,
                 },
                 Turn {
                     line_index: 2,
                     provisional: true,
                     text: "[User] That works!\n\n[Assistant] Great.".to_string(),
                     tool_summary: vec![],
+                    is_compaction_summary: false,
                 },
             ]
         );
@@ -452,6 +477,7 @@ mod tests {
                 provisional: true,
                 text: "[User] Hello\n\n[Assistant] Hi there".to_string(),
                 tool_summary: vec![],
+                is_compaction_summary: false,
             }]
         );
     }

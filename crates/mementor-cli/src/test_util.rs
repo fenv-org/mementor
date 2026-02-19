@@ -109,6 +109,26 @@ pub fn write_transcript(dir: &Path, lines: &[&str]) -> PathBuf {
     path
 }
 
+/// Build a `pr-link` type JSONL transcript entry (no `message` field).
+///
+/// Returns a JSON string suitable for writing to a transcript file.
+pub fn make_pr_link_entry(
+    session_id: &str,
+    pr_number: u32,
+    pr_url: &str,
+    pr_repository: &str,
+) -> String {
+    serde_json::json!({
+        "type": "pr-link",
+        "sessionId": session_id,
+        "prNumber": pr_number,
+        "prUrl": pr_url,
+        "prRepository": pr_repository,
+        "timestamp": "2026-02-17T00:00:00Z"
+    })
+    .to_string()
+}
+
 /// Strip margin markers from a multi-line string (Kotlin-style `trimMargin`).
 ///
 /// Each line is scanned for the first `|` character after optional leading

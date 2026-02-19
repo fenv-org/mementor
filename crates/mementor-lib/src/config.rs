@@ -37,3 +37,10 @@ pub const FILE_MATCH_DISTANCE: f64 = 0.40;
 /// An "information unit" is one whitespace-delimited word for alphabetic scripts,
 /// or one character for logographic scripts (CJK ideographs, kana).
 pub const MIN_QUERY_UNITS: usize = 3;
+
+/// Prefix that identifies compaction summary messages.
+///
+/// User messages starting with this prefix are post-compaction summaries
+/// injected by Claude Code after context window compaction.
+pub const COMPACTION_SUMMARY_PREFIX: &str =
+    "This session is being continued from a previous conversation";

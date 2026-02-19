@@ -11,6 +11,9 @@ pub struct TranscriptEntry {
     pub session_id: Option<String>,
     pub timestamp: Option<String>,
     pub message: Option<Message>,
+    pub pr_number: Option<u32>,
+    pub pr_url: Option<String>,
+    pub pr_repository: Option<String>,
 }
 
 /// A message within a transcript entry.
@@ -673,6 +676,27 @@ mod tests {
         // ASCII: 1 char = 1 grapheme
         assert_eq!(truncate("hello world", 5), "hello...");
         assert_eq!(truncate("short", 10), "short"); // no truncation
+    }
+
+    #[test]
+    fn deserialize_pr_link_entry() {
+        let json = r#"{
+            "type": "pr-link",
+            "sessionId": "sess-1",
+            "prNumber": 14,
+            "prUrl": "https://github.com/fenv-org/mementor/pull/14",
+            "prRepository": "fenv-org/mementor",
+            "timestamp": "2026-02-17T00:00:00Z"
+        }"#;
+        let entry: TranscriptEntry = serde_json::from_str(json).unwrap();
+        assert_eq!(entry.entry_type.as_deref(), Some("pr-link"));
+        assert_eq!(entry.pr_number, Some(14));
+        assert_eq!(
+            entry.pr_url.as_deref(),
+            Some("https://github.com/fenv-org/mementor/pull/14")
+        );
+        assert_eq!(entry.pr_repository.as_deref(), Some("fenv-org/mementor"));
+        assert!(entry.message.is_none());
     }
 
     #[test]
