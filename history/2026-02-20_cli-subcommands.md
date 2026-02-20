@@ -6,7 +6,7 @@ Depends on: [extended-data-collection](2026-02-20_extended-data-collection.md)
 ## Background
 
 Phases 1-3 establish the embedding model, schema, and data pipeline. Phase 4
-exposes this data through 11 CLI subcommands that AI agents and users can invoke
+exposes this data through 12 CLI subcommands that AI agents and users can invoke
 directly.
 
 ## Goal
@@ -14,7 +14,7 @@ directly.
 Implement all CLI subcommands with pagination, dual output format (text/JSON),
 and integration tests following the 5 testing rules.
 
-## Commands (11 Total)
+## Commands (12 Total)
 
 ### Model management
 
@@ -48,12 +48,11 @@ mementor search "<query>" [--fts] [--session <id>] [--json] [--offset N] [--limi
 ### Session browsing
 
 ```
-mementor sessions list [--json] [--limit N] [--oldest|--latest] [--pr <number>]
+mementor sessions list [--json] [--limit N] [--oldest|--latest]
 ```
 
 - Lists sessions with metadata (session_id, started_at, transcript_path,
   turn_count)
-- `--pr`: filter sessions that created or referenced a specific PR number
 - Default sort: oldest first (chronological)
 
 ### Turn viewing
@@ -91,6 +90,15 @@ mementor find-by-commit <hash> [--json] [--limit N]
 - Runs `git show --stat <hash>` to get file list
 - Looks up each file in `file_mentions`
 - Returns sessions and turns that touched files from the commit
+
+### PR-based lookup
+
+```
+mementor find-by-pr <number> [--json] [--limit N]
+```
+
+- Looks up `pr_links` table for sessions that created or referenced the PR
+- Returns sessions with metadata (session_id, started_at, pr_url)
 
 ### Access pattern search
 
@@ -175,11 +183,12 @@ All errors go to stderr. This is the existing pattern and must be maintained.
 | `reindex` | All | No | No |
 | `search` (vector) | chunks, turns | Yes (chunks) | No |
 | `search --fts` | turns_fts, turns | No | No |
-| `sessions list` | sessions, pr_links | No | No |
+| `sessions list` | sessions | No | No |
 | `turns get` | turns | No | No |
 | `compactions list` | entries | No | No |
 | `find-by-file` | file_mentions, turns | No | No |
 | `find-by-commit` | file_mentions, turns | No | Yes |
+| `find-by-pr` | pr_links, sessions | No | No |
 | `find-related sessions` | session_access_patterns | Yes | No |
 | `find-related turns` | session_access_patterns, turn_access_patterns | Yes + Rust | No |
 
@@ -228,6 +237,8 @@ enum Command {
     FindByFile { ... },
     /// Find sessions/turns by commit hash
     FindByCommit { ... },
+    /// Find sessions by PR number
+    FindByPr { ... },
     /// Find related sessions or turns by access pattern
     FindRelated {
         #[command(subcommand)]
@@ -257,11 +268,11 @@ Each subcommand must have integration tests following the 5 rules from
 | `search` | Seed turns + embeddings, search, verify results |
 | `search --fts` | Seed turns, FTS search, verify keyword matching |
 | `sessions list` | Seed sessions, list, verify output |
-| `sessions list --pr` | Seed sessions + pr_links, filter by PR |
 | `turns get` | Seed turns, get by session, verify pagination |
 | `compactions list` | Seed compaction entries, list, verify |
 | `find-by-file` | Seed file_mentions, query by path |
 | `find-by-commit` | Requires git repo setup in test |
+| `find-by-pr` | Seed pr_links, query by PR number |
 | `find-related sessions` | Seed centroids, query, verify ranking |
 | `find-related turns` | Seed turn centroids, sliding window, verify |
 
@@ -276,6 +287,7 @@ Each subcommand must have integration tests following the 5 rules from
 | `commands/compactions.rs` | New: compaction listing |
 | `commands/find_by_file.rs` | New: file-based lookup |
 | `commands/find_by_commit.rs` | New: commit-based lookup |
+| `commands/find_by_pr.rs` | New: PR-based lookup |
 | `commands/find_related.rs` | New: access pattern search |
 | `commands/reindex.rs` | New: re-ingest all |
 | `commands/model.rs` | New: model download |
@@ -283,18 +295,18 @@ Each subcommand must have integration tests following the 5 rules from
 
 ## TODO
 
-- [ ] Add clap definitions for all 11 commands
+- [ ] Add clap definitions for all 12 commands
 - [ ] Implement `mementor model download` command handler
 - [ ] Implement `mementor reindex` command handler
 - [ ] Implement `mementor search` (vector mode)
 - [ ] Implement `mementor search --fts` (FTS5 mode)
 - [ ] Implement `mementor search --session` (scoped search)
 - [ ] Implement `mementor sessions list`
-- [ ] Implement `mementor sessions list --pr`
 - [ ] Implement `mementor turns get`
 - [ ] Implement `mementor compactions list`
 - [ ] Implement `mementor find-by-file` with path normalization
 - [ ] Implement `mementor find-by-commit` with `git show --stat`
+- [ ] Implement `mementor find-by-pr` with `pr_links` lookup
 - [ ] Implement `mementor find-related sessions`
 - [ ] Implement `mementor find-related turns` with sliding window
 - [ ] Add `--json` output for all commands

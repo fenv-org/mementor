@@ -59,6 +59,7 @@ AI Agent (via CLI subcommands + plugin skills)
   ├─ mementor search --fts "<q>"   → FTS5 trigram keyword search
   ├─ mementor find-by-file <path>  → file_mentions lookup
   ├─ mementor find-by-commit <hash>→ git show --stat → file_mentions
+  ├─ mementor find-by-pr <number>  → pr_links lookup
   ├─ mementor find-related sessions→ session centroid vector search
   ├─ mementor find-related turns   → two-stage: session filter → turn sliding window
   ├─ mementor sessions list        → session metadata browsing
