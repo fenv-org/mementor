@@ -195,6 +195,12 @@ paths -- no absolute path issues across worktrees.
 - `sessions get <id>` for detailed single-session metadata
 - `turns get --segment N / --current` for compaction-boundary-aware retrieval
 
+## Documentation
+
+- `README.md` updated to reflect the new active agent-driven search approach,
+  14 CLI commands, multilingual-e5-base, plugin architecture, and 3-layer data
+  model
+
 ## Previous Work
 
 - [recall-quality-v2](2026-02-18_recall-quality-v2.md) -- indexing/storage improvements
