@@ -11,7 +11,7 @@ run = "NO_COLOR=1 cargo test --lib"
 description = "Run unit tests only with ANSI colors disabled"
 
 [tasks."model:download"]
-run = "cargo run -p mementor-main -- model download"
+run = "cargo run -p mementor -- model download"
 description = "Download embedding model from Hugging Face if not present"
 
 [tasks."deno:test"]

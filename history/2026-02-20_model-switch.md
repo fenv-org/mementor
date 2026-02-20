@@ -250,3 +250,5 @@ If e5 is chosen, `EmbedMode` stays as designed above.
   - Cache path: `models/bge-small-en-v1.5/model.onnx` → `~/.mementor/models/gte-multilingual-base`
   - Cache key: `onnx-model-bge-small-en-v1.5-v1` → `onnx-model-gte-multilingual-base-v1`
   - Move model download step after Setup ONNX Runtime (needs cargo build)
+- [x] Fix `mise.toml` model:download task: `mementor-main` → `mementor`
+  (package name is `mementor`, not `mementor-main`)
