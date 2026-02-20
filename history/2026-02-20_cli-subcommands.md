@@ -6,7 +6,7 @@ Depends on: [extended-data-collection](2026-02-20_extended-data-collection.md)
 ## Background
 
 Phases 1-3 establish the embedding model, schema, and data pipeline. Phase 4
-exposes this data through 12 CLI subcommands that AI agents and users can invoke
+exposes this data through 14 CLI subcommands that AI agents and users can invoke
 directly.
 
 ## Goal
@@ -14,7 +14,7 @@ directly.
 Implement all CLI subcommands with pagination, dual output format (text/JSON),
 and integration tests following the 5 testing rules.
 
-## Commands (12 Total)
+## Commands (14 Total)
 
 ### Model management
 
@@ -52,17 +52,38 @@ mementor sessions list [--json] [--limit N] [--oldest|--latest]
 ```
 
 - Lists sessions with metadata (session_id, started_at, transcript_path,
-  turn_count)
+  turn_count, compaction_count)
 - Default sort: oldest first (chronological)
+
+```
+mementor sessions get <session-id> [--json]
+```
+
+- Returns detailed metadata for a single session:
+  - session_id, started_at, transcript_path
+  - turn_count, compaction_count, subagent_count, file_count
+  - pr_links: array of {pr_number, pr_url} associated with this session
+- Useful for understanding a session's scope before drilling into turns
 
 ### Turn viewing
 
 ```
 mementor turns get <session> [--json] [--offset N] [--limit N] [--oldest|--latest]
+                             [--segment N] [--current]
 ```
 
 - Shows turns from a specific session with full_text and tool_summary
 - Paginated for large sessions
+- `--segment N`: returns turns in the Nth compaction segment only
+  - Segment 0 = session start → 1st compaction boundary
+  - Segment N = Nth compaction boundary → (N+1)th compaction boundary
+  - Determined by `compact_boundary` entries' `line_index` values
+- `--current`: returns turns after the last compaction boundary (the
+  unsummarized portion of the conversation)
+- `--segment` and `--current` are mutually exclusive
+- `--segment` and `--current` compose with `--offset/--limit` for pagination
+  within a segment
+- Without `--segment` or `--current`: returns all turns (existing behavior)
 
 ### Compaction summaries
 
@@ -183,8 +204,9 @@ All errors go to stderr. This is the existing pattern and must be maintained.
 | `reindex` | All | No | No |
 | `search` (vector) | chunks, turns | Yes (chunks) | No |
 | `search --fts` | turns_fts, turns | No | No |
-| `sessions list` | sessions | No | No |
-| `turns get` | turns | No | No |
+| `sessions list` | sessions, entries | No | No |
+| `sessions get` | sessions, entries, turns, file_mentions, pr_links, subagent_sessions | No | No |
+| `turns get` | turns, entries | No | No |
 | `compactions list` | entries | No | No |
 | `find-by-file` | file_mentions, turns | No | No |
 | `find-by-commit` | file_mentions, turns | No | Yes |
@@ -221,12 +243,12 @@ enum Command {
     /// Browse sessions
     Sessions {
         #[command(subcommand)]
-        command: SessionsCommand,
+        command: SessionsCommand,  // list, get
     },
     /// View turns from a session
     Turns {
         #[command(subcommand)]
-        command: TurnsCommand,
+        command: TurnsCommand,  // get (with --segment/--current)
     },
     /// View compaction summaries
     Compactions {
@@ -267,8 +289,11 @@ Each subcommand must have integration tests following the 5 rules from
 | `reindex` | Seed transcript, reindex, verify DB state |
 | `search` | Seed turns + embeddings, search, verify results |
 | `search --fts` | Seed turns, FTS search, verify keyword matching |
-| `sessions list` | Seed sessions, list, verify output |
+| `sessions list` | Seed sessions, list, verify output (incl. compaction_count) |
+| `sessions get` | Seed session with turns/files/PRs, verify all counts |
 | `turns get` | Seed turns, get by session, verify pagination |
+| `turns get --segment` | Seed turns + compact_boundary entries, verify segment filtering |
+| `turns get --current` | Seed turns + compact_boundary entries, verify post-compaction turns |
 | `compactions list` | Seed compaction entries, list, verify |
 | `find-by-file` | Seed file_mentions, query by path |
 | `find-by-commit` | Requires git repo setup in test |
@@ -295,14 +320,17 @@ Each subcommand must have integration tests following the 5 rules from
 
 ## TODO
 
-- [ ] Add clap definitions for all 12 commands
+- [ ] Add clap definitions for all 14 commands
 - [ ] Implement `mementor model download` command handler
 - [ ] Implement `mementor reindex` command handler
 - [ ] Implement `mementor search` (vector mode)
 - [ ] Implement `mementor search --fts` (FTS5 mode)
 - [ ] Implement `mementor search --session` (scoped search)
-- [ ] Implement `mementor sessions list`
+- [ ] Implement `mementor sessions list` (with compaction_count)
+- [ ] Implement `mementor sessions get` (detailed single-session metadata)
 - [ ] Implement `mementor turns get`
+- [ ] Implement `mementor turns get --segment N` (compaction segment filtering)
+- [ ] Implement `mementor turns get --current` (post-last-compaction turns)
 - [ ] Implement `mementor compactions list`
 - [ ] Implement `mementor find-by-file` with path normalization
 - [ ] Implement `mementor find-by-commit` with `git show --stat`

@@ -63,7 +63,8 @@ AI Agent (via CLI subcommands + plugin skills)
   ├─ mementor find-related sessions→ session centroid vector search
   ├─ mementor find-related turns   → two-stage: session filter → turn sliding window
   ├─ mementor sessions list        → session metadata browsing
-  ├─ mementor turns get <session>  → per-turn content viewing
+  ├─ mementor sessions get <id>   → single session detail with compaction/turn counts
+  ├─ mementor turns get <session>  → per-turn content viewing (segment-aware)
   └─ mementor compactions list     → compaction summary browsing
 ```
 
@@ -99,7 +100,7 @@ All phases are sequential -- each depends on the previous.
 | 1 | [model-switch](2026-02-20_model-switch.md) | Embedding model switch, asymmetric prefixes, download subcommand |
 | 2 | [schema-redesign](2026-02-20_schema-redesign.md) | 12-table schema, FTS5, ingest pipeline rewrite |
 | 3 | [extended-data-collection](2026-02-20_extended-data-collection.md) | Subagent indexing, centroids, file-history-snapshot |
-| 4 | [cli-subcommands](2026-02-20_cli-subcommands.md) | 11 CLI commands with pagination and output formatting |
+| 4 | [cli-subcommands](2026-02-20_cli-subcommands.md) | 14 CLI commands with pagination and output formatting |
 | 5 | [plugin](2026-02-20_plugin.md) | Marketplace, skills, agent, hook migration, installation |
 
 ## Code Removal (Passive Recall)
@@ -190,6 +191,9 @@ paths -- no absolute path issues across worktrees.
 - Text output by default, `--json` flag for machine-parseable output
 - Skills use `--json` in SKILL.md for reliable parsing
 - Errors go to stderr
+- `sessions list` includes `compaction_count` per session
+- `sessions get <id>` for detailed single-session metadata
+- `turns get --segment N / --current` for compaction-boundary-aware retrieval
 
 ## Previous Work
 
