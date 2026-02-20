@@ -3,6 +3,10 @@
     "commit": "",
     "pr": ""
   },
+  "enabledPlugins": {
+    "code-simplifier@claude-plugins-official": true,
+    "code-review@claude-plugins-official": true
+  },
   "hooks": {
     "PreCompact": [
       {
@@ -62,6 +66,8 @@
       "WebSearch",
       "Skill(commit)",
       "Skill(worktree)",
+      "Skill(simplify)",
+      "Skill(review)",
       "Bash(cargo *)",
       "Bash(rustc --print *)",
       "Bash(mise *)",
