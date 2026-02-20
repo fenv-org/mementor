@@ -139,6 +139,67 @@ Current thresholds are calibrated for 384d BGE. After switching to 768d e5-base:
 - `FILE_MATCH_DISTANCE`: needs recalibration
 - These will be determined experimentally during implementation
 
+## PoC: Model and Quantization Evaluation
+
+Before finalizing the model choice, Phase 1 includes a practical evaluation
+comparing models and quantization levels.
+
+### Candidate models
+
+| Model | Dimensions | Max tokens | Prefix | fastembed built-in | ONNX size |
+|-------|-----------|-----------|--------|-------------------|-----------|
+| multilingual-e5-base (default) | 768 | 512 | `passage: ` / `query: ` | Yes (`MultilingualE5Base`) | ~880 MB |
+| GTE multilingual base (Alibaba) | 768 (elastic 128-768) | **8,192** | None | No (`UserDefinedEmbeddingModel`) | ~1.2 GB |
+
+**GTE advantages**:
+- 8,192 token context → turns can be embedded whole without chunking
+- No prefix management → simpler code (no `EmbedMode` enum)
+- Elastic dimensions → 128d option with <2% accuracy loss, 6x storage savings
+
+**GTE risks**:
+- Not in fastembed's built-in model list → `UserDefinedEmbeddingModel` required
+- ONNX export via [onnx-community](https://huggingface.co/onnx-community/gte-multilingual-base),
+  not official Optimum → compatibility risk with fastembed's ONNX runtime version
+- Larger model size (~1.2 GB vs ~880 MB)
+
+### Quantization comparison: f32 vs int8
+
+For the chosen model, compare f32 (default) and int8 quantized variants:
+
+| Metric | f32 | int8 |
+|--------|-----|------|
+| Model size | ~880 MB (e5) / ~1.2 GB (GTE) | ~220 MB (e5) / ~300 MB (GTE) |
+| Embedding speed | baseline | expected 2-4x faster |
+| Accuracy | baseline | expected <2% degradation |
+| Memory usage | baseline | ~4x reduction |
+
+### Evaluation protocol
+
+1. **Prepare test corpus**: 20 representative turns from existing mementor
+   transcripts (mix of EN, KO, code-heavy, discussion-heavy)
+2. **Embed with all variants**: e5-f32, e5-int8, GTE-f32, GTE-int8
+3. **Measure speed**: batch embed 100 turns, record wall time (3 runs, median)
+4. **Measure accuracy**: compute pairwise cosine distances for known-relevant
+   and known-irrelevant pairs, calculate recall@5 and MRR
+5. **Cross-language test**: EN query → KO passage, KO query → EN passage
+6. **Decision criteria**:
+   - If GTE loads successfully via fastembed and accuracy is comparable → prefer
+     GTE for 8K context
+   - If int8 accuracy loss < 3% and speed gain > 2x → use int8 for production
+   - If GTE has compatibility issues → stay with e5-base
+
+### Decision matrix
+
+| Outcome | Model | Quantization | Dimension |
+|---------|-------|-------------|-----------|
+| GTE works + int8 accurate | GTE multilingual base | int8 | 768 |
+| GTE works + int8 inaccurate | GTE multilingual base | f32 | 768 |
+| GTE fails + int8 accurate | multilingual-e5-base | int8 | 768 |
+| GTE fails + int8 inaccurate | multilingual-e5-base | f32 | 768 |
+
+If GTE is chosen, the `EmbedMode` enum and prefix logic are removed.
+If e5 is chosen, `EmbedMode` stays as designed above.
+
 ## Files to Change
 
 | File | Change |
@@ -158,8 +219,17 @@ Current thresholds are calibrated for 384d BGE. After switching to 768d e5-base:
 
 ## TODO
 
-- [ ] Download multilingual-e5-base model files
-- [ ] Implement `EmbedMode` enum
+### PoC: Model and quantization evaluation
+- [ ] Download multilingual-e5-base (f32 + int8)
+- [ ] Download GTE multilingual base ONNX from onnx-community (f32 + int8)
+- [ ] Verify GTE loads via fastembed `UserDefinedEmbeddingModel`
+- [ ] Prepare test corpus (20 turns: EN, KO, code, discussion)
+- [ ] Benchmark embedding speed (e5-f32, e5-int8, GTE-f32, GTE-int8)
+- [ ] Measure retrieval accuracy (recall@5, MRR, cross-language)
+- [ ] Document results and finalize model + quantization choice
+
+### Implementation (after PoC decision)
+- [ ] Implement `EmbedMode` enum (skip if GTE chosen)
 - [ ] Rewrite `Embedder::new()` for disk-based loading
 - [ ] Implement `embed_batch()` with prefix injection
 - [ ] Expose `tokenizer()` from Embedder

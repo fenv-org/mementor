@@ -179,6 +179,8 @@ paths -- no absolute path issues across worktrees.
 - Use fastembed built-in `EmbeddingModel::MultilingualE5Base` (memory-mapped)
 - fastembed does NOT add E5 prefixes -- `EmbedMode` enum required
 - Expose tokenizer from Embedder for chunker use
+- **PoC in Phase 1**: evaluate GTE multilingual base (8K context, no prefix)
+  as alternative; compare f32 vs int8 quantization (speed + accuracy)
 
 ### Plugin
 
