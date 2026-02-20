@@ -15,7 +15,7 @@ fn main() -> anyhow::Result<()> {
         .primary_root()
         .map_or_else(|| cwd.clone(), Path::to_path_buf);
     let log_dir = std::env::var("MEMENTOR_LOG_DIR").ok().map(PathBuf::from);
-    let context = MementorContext::with_cwd_and_log_dir(cwd, project_root, is_linked, log_dir);
+    let context = MementorContext::with_cwd_and_log_dir(cwd, project_root, is_linked, log_dir)?;
 
     // 2. Init file logging (no-op if log_dir is None)
     mementor_cli::logging::init_file_logging(&context);

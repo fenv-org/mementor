@@ -9,7 +9,7 @@ where
     F: FnOnce(&MementorContext, &mut BufferedIO),
 {
     let tmp = tempfile::tempdir().unwrap();
-    let context = MementorContext::new(tmp.path().to_path_buf());
+    let context = MementorContext::new(tmp.path().to_path_buf()).unwrap();
     let mut io = BufferedIO::new();
     f(&context, &mut io);
 }
@@ -21,7 +21,7 @@ where
     F: FnOnce(&MementorContext, &mut BufferedIO),
 {
     let tmp = tempfile::tempdir().unwrap();
-    let context = MementorContext::new(tmp.path().to_path_buf());
+    let context = MementorContext::new(tmp.path().to_path_buf()).unwrap();
     let mut io = BufferedIO::new();
     f(&context, &mut io);
     let stdout = io.stdout_to_string();
@@ -31,5 +31,5 @@ where
 
 /// Create a `MementorContext` from an explicit path.
 pub fn context_at(path: PathBuf) -> MementorContext {
-    MementorContext::new(path)
+    MementorContext::new(path).unwrap()
 }

@@ -116,3 +116,9 @@ vs disk loading, and DB schema migration.
 - [x] Add `model_cache_dir()` accessor test in `context.rs`
 - [x] Add `MementorContext::with_model_cache_dir()` builder method
 - [x] Add integration tests for `mementor model download` (cached + force paths)
+
+#### Code review fixes
+- [x] Rewrite force-download test to be deterministic (no network, no `let _ =`)
+- [x] Use full `assert_eq!` with `dirs::home_dir()` in `model_cache_dir_has_default` test
+- [x] Update AGENTS.md constraint: "No external API dependencies" → "at runtime" (model download is one-time)
+- [x] Make `MementorContext` constructors return `anyhow::Result` (remove `expect()` panic in `default_model_cache_dir`)

@@ -30,8 +30,10 @@ cross-session context persistence without any external API dependencies.
 
 - **Static linking required**: All native dependencies (SQLite, sqlite-vector)
   must be statically linked. No runtime shared library dependencies.
-- **No external API dependencies**: Everything runs locally. No network calls
-  for embedding, search, or any other operation.
+- **No external API dependencies at runtime**: Embedding, search, and all
+  other operations run locally with no network calls. The only network access
+  is the one-time `mementor model download` command, which fetches the ONNX
+  model from Hugging Face Hub.
 - **macOS only (Milestone 1)**: Target Apple Silicon (ARM64) and Intel (x86_64)
   Macs. Do not add Linux or Windows-specific code yet.
 
