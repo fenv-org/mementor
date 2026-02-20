@@ -220,27 +220,33 @@ If e5 is chosen, `EmbedMode` stays as designed above.
 ## TODO
 
 ### PoC: Model and quantization evaluation
-- [ ] Download multilingual-e5-base (f32 + int8)
-- [ ] Download GTE multilingual base ONNX from onnx-community (f32 + int8)
-- [ ] Verify GTE loads via fastembed `UserDefinedEmbeddingModel`
-- [ ] Prepare test corpus (20 turns: EN, KO, code, discussion)
-- [ ] Benchmark embedding speed (e5-f32, e5-int8, GTE-f32, GTE-int8)
-- [ ] Measure retrieval accuracy (recall@5, MRR, cross-language)
-- [ ] Document results and finalize model + quantization choice
+- [x] Download multilingual-e5-base (f32 + int8)
+- [x] Download GTE multilingual base ONNX from onnx-community (f32 + int8)
+- [x] Verify GTE loads via fastembed `UserDefinedEmbeddingModel`
+- [x] Prepare test corpus (20 turns: EN, KO, code, discussion)
+- [x] Benchmark embedding speed (e5-f32, e5-int8, GTE-f32, GTE-int8)
+- [x] Measure retrieval accuracy (recall@5, MRR, cross-language)
+- [x] Document results and finalize model + quantization choice → GTE int8
 
-### Implementation (after PoC decision)
-- [ ] Implement `EmbedMode` enum (skip if GTE chosen)
-- [ ] Rewrite `Embedder::new()` for disk-based loading
-- [ ] Implement `embed_batch()` with prefix injection
-- [ ] Expose `tokenizer()` from Embedder
-- [ ] Update chunker to use Embedder's tokenizer
-- [ ] Add `model_dir` to `MementorContext`
-- [ ] Implement `mementor model download` subcommand
-- [ ] Update `EMBEDDING_DIMENSION` to 768
-- [ ] Update `vector_init` dimension
-- [ ] Calibrate distance thresholds for e5-base
-- [ ] Update all call sites for new `embed_batch` signature
-- [ ] Update all tests for new Embedder API
-- [ ] Update download script and mise task
-- [ ] Update CLAUDE.md documentation
-- [ ] Remove bundled BGE model files from `models/bge-small-en-v1.5/`
+### Implementation (GTE multilingual base int8)
+- [x] ~~Implement `EmbedMode` enum~~ (skipped: GTE needs no prefix)
+- [x] Rewrite `Embedder::new()` for disk-based loading
+- [x] ~~Implement `embed_batch()` with prefix injection~~ (skipped: GTE needs no prefix)
+- [x] Expose `tokenizer()` from Embedder
+- [x] Update chunker to use Embedder's tokenizer
+- [x] Add `model_dir` to `MementorContext`
+- [x] Implement `mementor model download` subcommand
+- [x] Update `EMBEDDING_DIMENSION` to 768
+- [x] Update `vector_init` dimension
+- [x] Calibrate distance thresholds (`FILE_MATCH_DISTANCE` 0.40 → 0.35)
+- [x] Update all call sites for new `embed_batch` signature
+- [x] Update all tests for new Embedder API
+- [x] Update download script and mise task
+- [x] Update CLAUDE.md documentation
+- [x] Remove bundled BGE model files from `models/bge-small-en-v1.5/`
+
+### CI fix
+- [x] Update CI workflow for new model path
+  - Cache path: `models/bge-small-en-v1.5/model.onnx` → `~/.mementor/models/gte-multilingual-base`
+  - Cache key: `onnx-model-bge-small-en-v1.5-v1` → `onnx-model-gte-multilingual-base-v1`
+  - Move model download step after Setup ONNX Runtime (needs cargo build)
