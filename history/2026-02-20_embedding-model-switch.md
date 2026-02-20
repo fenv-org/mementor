@@ -104,6 +104,6 @@ vs disk loading, and DB schema migration.
 - [x] Add `mementor model download` CLI command
 - [x] Update `main.rs` for model dir resolution (handled by MementorContext defaults)
 - [x] Recalibrate distance thresholds (`FILE_MATCH_DISTANCE` 0.40 → 0.35)
-- [ ] Remove bundled BGE model files
-- [ ] Update scripts, mise.toml, CLAUDE.md
-- [ ] Remove PoC crate from workspace
+- [x] Remove bundled BGE model files (`models/bge-small-en-v1.5/`)
+- [x] Update scripts, mise.toml, CLAUDE.md
+- [x] Remove PoC crate from workspace

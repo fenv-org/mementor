@@ -4,7 +4,6 @@ members = [
     "crates/mementor-cli",
     "crates/mementor-main",
     "crates/mementor-test-util",
-    "crates/mementor-poc-embedding",
 ]
 resolver = "3"
 

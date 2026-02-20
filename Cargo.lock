@@ -1812,16 +1812,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mementor-poc-embedding"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "dirs",
- "fastembed",
- "hf-hub 0.5.0",
-]
-
-[[package]]
 name = "mementor-test-util"
 version = "0.1.0"
 dependencies = [
