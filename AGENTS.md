@@ -17,8 +17,9 @@ cross-session context persistence without any external API dependencies.
   functions** (`vector_distance_cos`, etc.), **NOT virtual tables**. The C
   sources live in `vendor/sqlite-vector/` and are statically compiled via the
   `cc` crate in `build.rs`.
-- **Embedding**: `fastembed-rs` with the bundled BGE-small-en-v1.5 fp32 ONNX
-  model (384 dimensions). Model files are in `models/bge-small-en-v1.5/`.
+- **Embedding**: `fastembed-rs` with GTE multilingual base int8 ONNX model
+  (768 dimensions). Model files are loaded from disk at runtime
+  (`~/.mementor/models/gte-multilingual-base/`).
 - **Text splitting**: `text-splitter` crate with `MarkdownSplitter`
 - **Schema migration**: `rusqlite_migration`
 - **Error handling**: `anyhow`
@@ -29,8 +30,10 @@ cross-session context persistence without any external API dependencies.
 
 - **Static linking required**: All native dependencies (SQLite, sqlite-vector)
   must be statically linked. No runtime shared library dependencies.
-- **No external API dependencies**: Everything runs locally. No network calls
-  for embedding, search, or any other operation.
+- **No external API dependencies at runtime**: Embedding, search, and all
+  other operations run locally with no network calls. The only network access
+  is the one-time `mementor model download` command, which fetches the ONNX
+  model from Hugging Face Hub.
 - **macOS only (Milestone 1)**: Target Apple Silicon (ARM64) and Intel (x86_64)
   Macs. Do not add Linux or Windows-specific code yet.
 
@@ -57,9 +60,6 @@ mementor/
     sqlite-vector/
       src/                C source files
       libs/fp16/          FP16 support headers
-
-  models/
-    bge-small-en-v1.5/    ONNX model files
 
   history/                Task documents (one per session/milestone)
   scripts/                Build and utility scripts
@@ -114,16 +114,16 @@ cargo build --release
 
 ### ONNX Model
 
-The BGE-small-en-v1.5 ONNX model is embedded into the binary at compile time
-via `include_bytes!`. The model file must exist before building:
+The GTE multilingual base int8 ONNX model is loaded from disk at runtime.
+Model files must be downloaded before first use:
 
 ```bash
 mise run model:download
 ```
 
-This downloads `models/bge-small-en-v1.5/model.onnx` from Hugging Face Hub if
-it is not already present. If you cloned with Git LFS, the file is already
-available and the script is a no-op.
+This runs `mementor model download`, which fetches model files from Hugging
+Face Hub to `~/.mementor/models/gte-multilingual-base/`. The download location
+can be overridden via the `MEMENTOR_MODEL_DIR` environment variable.
 
 ### ONNX Runtime on x86_64 macOS (Intel Mac)
 
@@ -168,7 +168,7 @@ Key points:
 - Vector data is stored as BLOB in regular SQLite columns using
   `vector_as_f32(json_text)` for conversion.
 - After schema creation, call `vector_init('table', 'column', 'type=f32,
-  dimension=384, distance=cosine')` to register the table with the extension.
+  dimension=768, distance=cosine')` to register the table with the extension.
   This must be done on every new connection.
 - Similarity search uses the `vector_full_scan` virtual table:
   ```sql

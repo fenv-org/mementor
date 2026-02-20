@@ -11,7 +11,6 @@ use std::path::Path;
 
 use anyhow::Context;
 use rusqlite::Connection;
-use tokenizers::Tokenizer;
 use tracing::{debug, info};
 
 use crate::config::{FILE_MATCH_DISTANCE, MAX_COSINE_DISTANCE, OVER_FETCH_MULTIPLIER};
@@ -208,12 +207,12 @@ pub fn extract_file_hints(query: &str) -> Vec<&str> {
 pub fn run_ingest(
     conn: &Connection,
     embedder: &mut Embedder,
-    tokenizer: &Tokenizer,
     session_id: &str,
     transcript_path: &Path,
     project_dir: &str,
     project_root: &str,
 ) -> anyhow::Result<()> {
+    let tokenizer = embedder.tokenizer().clone();
     // Load or create session
     let session = queries::get_session(conn, session_id)?;
     let (start_line, provisional_start) = if let Some(s) = &session {
@@ -316,7 +315,7 @@ pub fn run_ingest(
     let mut new_provisional_start: Option<usize> = None;
 
     for turn in &turns {
-        let chunks = chunk_turn(turn, tokenizer);
+        let chunks = chunk_turn(turn, &tokenizer);
         debug!(
             session_id = %session_id,
             line_index = turn.line_index,
@@ -648,22 +647,21 @@ pub fn search_file_context(
 mod tests {
     use super::*;
     use crate::db::driver::DatabaseDriver;
-    use crate::pipeline::chunker::load_tokenizer;
+    use mementor_test_util::model::model_dir;
     use mementor_test_util::transcript::{make_entry, make_pr_link_entry, write_transcript};
 
-    fn setup_test() -> (tempfile::TempDir, Connection, Embedder, Tokenizer) {
+    fn setup_test() -> (tempfile::TempDir, Connection, Embedder) {
         let tmp = tempfile::tempdir().unwrap();
         let db_path = tmp.path().join("test.db");
         let driver = DatabaseDriver::file(db_path);
         let conn = driver.open().unwrap();
-        let embedder = Embedder::new().unwrap();
-        let tokenizer = load_tokenizer().unwrap();
-        (tmp, conn, embedder, tokenizer)
+        let embedder = Embedder::new(&model_dir()).unwrap();
+        (tmp, conn, embedder)
     }
 
     #[test]
     fn first_ingestion_creates_provisional() {
-        let (tmp, conn, mut embedder, tokenizer) = setup_test();
+        let (tmp, conn, mut embedder) = setup_test();
 
         let lines = vec![
             make_entry("user", "Hello, how are you?"),
@@ -675,7 +673,6 @@ mod tests {
         run_ingest(
             &conn,
             &mut embedder,
-            &tokenizer,
             "s1",
             &transcript,
             "/tmp/project",
@@ -690,7 +687,7 @@ mod tests {
 
     #[test]
     fn second_ingestion_completes_provisional() {
-        let (tmp, conn, mut embedder, tokenizer) = setup_test();
+        let (tmp, conn, mut embedder) = setup_test();
 
         // First ingestion: User + Assistant (provisional)
         let lines1 = vec![
@@ -699,16 +696,7 @@ mod tests {
         ];
         let refs1: Vec<&str> = lines1.iter().map(String::as_str).collect();
         let transcript = write_transcript(tmp.path(), &refs1);
-        run_ingest(
-            &conn,
-            &mut embedder,
-            &tokenizer,
-            "s1",
-            &transcript,
-            "/tmp/p",
-            "/tmp/p",
-        )
-        .unwrap();
+        run_ingest(&conn, &mut embedder, "s1", &transcript, "/tmp/p", "/tmp/p").unwrap();
 
         // Second ingestion: Append another pair
         let lines2 = vec![
@@ -722,16 +710,7 @@ mod tests {
         ];
         let refs2: Vec<&str> = lines2.iter().map(String::as_str).collect();
         let transcript = write_transcript(tmp.path(), &refs2);
-        run_ingest(
-            &conn,
-            &mut embedder,
-            &tokenizer,
-            "s1",
-            &transcript,
-            "/tmp/p",
-            "/tmp/p",
-        )
-        .unwrap();
+        run_ingest(&conn, &mut embedder, "s1", &transcript, "/tmp/p", "/tmp/p").unwrap();
 
         let session = queries::get_session(&conn, "s1").unwrap().unwrap();
         // Turn 2 should be provisional
@@ -741,7 +720,7 @@ mod tests {
 
     #[test]
     fn search_returns_relevant_results() {
-        let (tmp, conn, mut embedder, tokenizer) = setup_test();
+        let (tmp, conn, mut embedder) = setup_test();
 
         let lines = vec![
             make_entry("user", "How do I implement authentication in Rust?"),
@@ -757,16 +736,7 @@ mod tests {
         ];
         let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
         let transcript = write_transcript(tmp.path(), &refs);
-        run_ingest(
-            &conn,
-            &mut embedder,
-            &tokenizer,
-            "s1",
-            &transcript,
-            "/tmp/p",
-            "/tmp/p",
-        )
-        .unwrap();
+        run_ingest(&conn, &mut embedder, "s1", &transcript, "/tmp/p", "/tmp/p").unwrap();
 
         // Search from a different session to test cross-session recall
         // (same-session without compaction boundary is filtered out)
@@ -777,18 +747,9 @@ mod tests {
 
     #[test]
     fn empty_transcript_is_handled() {
-        let (tmp, conn, mut embedder, tokenizer) = setup_test();
+        let (tmp, conn, mut embedder) = setup_test();
         let transcript = write_transcript(tmp.path(), &[]);
-        run_ingest(
-            &conn,
-            &mut embedder,
-            &tokenizer,
-            "s1",
-            &transcript,
-            "/tmp/p",
-            "/tmp/p",
-        )
-        .unwrap();
+        run_ingest(&conn, &mut embedder, "s1", &transcript, "/tmp/p", "/tmp/p").unwrap();
 
         let session = queries::get_session(&conn, "s1").unwrap();
         assert!(session.is_none());
@@ -796,7 +757,7 @@ mod tests {
 
     #[test]
     fn re_ingestion_is_idempotent() {
-        let (tmp, conn, mut embedder, tokenizer) = setup_test();
+        let (tmp, conn, mut embedder) = setup_test();
 
         let lines = vec![
             make_entry("user", "Hello"),
@@ -806,26 +767,8 @@ mod tests {
         let transcript = write_transcript(tmp.path(), &refs);
 
         // Ingest twice with the same data
-        run_ingest(
-            &conn,
-            &mut embedder,
-            &tokenizer,
-            "s1",
-            &transcript,
-            "/tmp/p",
-            "/tmp/p",
-        )
-        .unwrap();
-        run_ingest(
-            &conn,
-            &mut embedder,
-            &tokenizer,
-            "s1",
-            &transcript,
-            "/tmp/p",
-            "/tmp/p",
-        )
-        .unwrap();
+        run_ingest(&conn, &mut embedder, "s1", &transcript, "/tmp/p", "/tmp/p").unwrap();
+        run_ingest(&conn, &mut embedder, "s1", &transcript, "/tmp/p", "/tmp/p").unwrap();
 
         // Should still have data — no duplicates (INSERT OR REPLACE handles this)
         let emb = embedder.embed_batch(&["Hello"]).unwrap();
@@ -888,7 +831,7 @@ mod tests {
 
     #[test]
     fn in_context_results_filtered_out() {
-        let (_tmp, conn, mut embedder, _) = setup_test();
+        let (_tmp, conn, mut embedder) = setup_test();
 
         ensure_session(&conn, "s1", 10, None);
         seed_memory(&conn, &mut embedder, "s1", 0, 0, "Rust authentication");
@@ -901,7 +844,7 @@ mod tests {
 
     #[test]
     fn pre_compaction_results_retained() {
-        let (_tmp, conn, mut embedder, _) = setup_test();
+        let (_tmp, conn, mut embedder) = setup_test();
 
         // Memory at line 2, compaction boundary at line 5 → memory is pre-compaction
         ensure_session(&conn, "s1", 10, Some(5));
@@ -915,7 +858,7 @@ mod tests {
 
     #[test]
     fn post_compaction_results_filtered_out() {
-        let (_tmp, conn, mut embedder, _) = setup_test();
+        let (_tmp, conn, mut embedder) = setup_test();
 
         // Memory at line 8, compaction boundary at line 5 → memory is post-compaction (in-context)
         ensure_session(&conn, "s1", 10, Some(5));
@@ -928,7 +871,7 @@ mod tests {
 
     #[test]
     fn cross_session_results_always_returned() {
-        let (_tmp, conn, mut embedder, _) = setup_test();
+        let (_tmp, conn, mut embedder) = setup_test();
 
         ensure_session(&conn, "s1", 10, None);
         seed_memory(&conn, &mut embedder, "s1", 0, 0, "Rust authentication");
@@ -942,7 +885,7 @@ mod tests {
 
     #[test]
     fn distance_threshold_filters_irrelevant() {
-        let (_tmp, conn, mut embedder, _) = setup_test();
+        let (_tmp, conn, mut embedder) = setup_test();
 
         ensure_session(&conn, "s1", 10, None);
         // Seed a memory with completely unrelated content
@@ -975,7 +918,7 @@ mod tests {
 
     #[test]
     fn turn_dedup_reconstructs_full_turn() {
-        let (_tmp, conn, mut embedder, _) = setup_test();
+        let (_tmp, conn, mut embedder) = setup_test();
 
         ensure_session(&conn, "s1", 10, None);
         // Simulate a multi-chunk turn: same session + line_index, different chunk_index
@@ -1274,7 +1217,7 @@ mod tests {
 
     #[test]
     fn results_truncated_to_k() {
-        let (_tmp, conn, mut embedder, _) = setup_test();
+        let (_tmp, conn, mut embedder) = setup_test();
 
         ensure_session(&conn, "s1", 20, None);
         // Seed more unique turns than k=2
@@ -1311,7 +1254,7 @@ mod tests {
 
     #[test]
     fn ingest_stores_pr_links() {
-        let (tmp, conn, mut embedder, tokenizer) = setup_test();
+        let (tmp, conn, mut embedder) = setup_test();
 
         let lines = vec![
             make_entry("user", "Hello"),
@@ -1326,16 +1269,7 @@ mod tests {
         let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
         let transcript = write_transcript(tmp.path(), &refs);
 
-        run_ingest(
-            &conn,
-            &mut embedder,
-            &tokenizer,
-            "s1",
-            &transcript,
-            "/tmp/p",
-            "/tmp/p",
-        )
-        .unwrap();
+        run_ingest(&conn, &mut embedder, "s1", &transcript, "/tmp/p", "/tmp/p").unwrap();
 
         assert_eq!(
             queries::get_pr_links_for_session(&conn, "s1").unwrap(),
@@ -1351,7 +1285,7 @@ mod tests {
 
     #[test]
     fn compaction_summary_stored_with_role() {
-        let (tmp, conn, mut embedder, tokenizer) = setup_test();
+        let (tmp, conn, mut embedder) = setup_test();
 
         let prefix = crate::config::COMPACTION_SUMMARY_PREFIX;
         let summary_text = format!("{prefix}. The previous session explored Rust error handling.");
@@ -1363,16 +1297,7 @@ mod tests {
         let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
         let transcript = write_transcript(tmp.path(), &refs);
 
-        run_ingest(
-            &conn,
-            &mut embedder,
-            &tokenizer,
-            "s1",
-            &transcript,
-            "/tmp/p",
-            "/tmp/p",
-        )
-        .unwrap();
+        run_ingest(&conn, &mut embedder, "s1", &transcript, "/tmp/p", "/tmp/p").unwrap();
 
         let role: String = conn
             .query_row(
@@ -1386,7 +1311,7 @@ mod tests {
 
     #[test]
     fn pr_link_reingest_is_idempotent() {
-        let (tmp, conn, mut embedder, tokenizer) = setup_test();
+        let (tmp, conn, mut embedder) = setup_test();
 
         let lines = vec![
             make_entry("user", "Hello"),
@@ -1402,26 +1327,8 @@ mod tests {
         let transcript = write_transcript(tmp.path(), &refs);
 
         // Ingest twice
-        run_ingest(
-            &conn,
-            &mut embedder,
-            &tokenizer,
-            "s1",
-            &transcript,
-            "/tmp/p",
-            "/tmp/p",
-        )
-        .unwrap();
-        run_ingest(
-            &conn,
-            &mut embedder,
-            &tokenizer,
-            "s1",
-            &transcript,
-            "/tmp/p",
-            "/tmp/p",
-        )
-        .unwrap();
+        run_ingest(&conn, &mut embedder, "s1", &transcript, "/tmp/p", "/tmp/p").unwrap();
+        run_ingest(&conn, &mut embedder, "s1", &transcript, "/tmp/p", "/tmp/p").unwrap();
 
         let count: i64 = conn
             .query_row(

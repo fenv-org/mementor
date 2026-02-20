@@ -6,7 +6,8 @@ use mementor_lib::db::queries::{Session, insert_memory, upsert_session};
 use mementor_lib::embedding::embedder::Embedder;
 use mementor_lib::runtime::Runtime;
 
-// Re-export shared transcript helpers from mementor-test-util.
+// Re-export shared helpers from mementor-test-util.
+pub use mementor_test_util::model::model_dir;
 pub use mementor_test_util::transcript::{make_entry, make_pr_link_entry, write_transcript};
 
 /// Create a [`Runtime`] with an in-memory database and a tempdir-based context.
@@ -18,7 +19,7 @@ pub fn runtime_in_memory(name: &str) -> (tempfile::TempDir, Runtime) {
     let tmp = tempfile::tempdir().unwrap();
     // Create a bare .git directory so that the tempdir looks like a git repo.
     std::fs::create_dir(tmp.path().join(".git")).unwrap();
-    let ctx = MementorContext::new(tmp.path().to_path_buf());
+    let ctx = MementorContext::new(tmp.path().to_path_buf()).unwrap();
     let db = DatabaseDriver::in_memory(name).unwrap();
     let runtime = Runtime { context: ctx, db };
     (tmp, runtime)
@@ -30,7 +31,7 @@ pub fn runtime_in_memory(name: &str) -> (tempfile::TempDir, Runtime) {
 /// project where mementor has not been enabled.
 pub fn runtime_not_enabled() -> (tempfile::TempDir, Runtime) {
     let tmp = tempfile::tempdir().unwrap();
-    let ctx = MementorContext::new(tmp.path().to_path_buf());
+    let ctx = MementorContext::new(tmp.path().to_path_buf()).unwrap();
     let db = DatabaseDriver::file(PathBuf::from("/nonexistent/mementor.db"));
     let runtime = Runtime { context: ctx, db };
     (tmp, runtime)

@@ -8,7 +8,7 @@ use mementor_lib::runtime::Runtime;
 /// Run the `mementor enable` command.
 ///
 /// 1. Create `.mementor/` directory and initialize DB with schema.
-/// 2. Verify bundled embedding model loads.
+/// 2. Verify embedding model loads.
 /// 3. Append `.mementor/` to `.gitignore` if not present.
 /// 4. Add mementor hooks to `.claude/settings.json`.
 pub fn run_enable<IN, OUT, ERR>(
@@ -38,7 +38,7 @@ where
 
     // Step 2: Verify embedding model loads
     writeln!(io.stderr(), "Verifying embedding model...")?;
-    let _embedder = Embedder::new()?;
+    let _embedder = Embedder::new(runtime.context.model_cache_dir())?;
     writeln!(io.stderr(), "  Embedding model OK")?;
 
     // Step 3: Update .gitignore
@@ -869,7 +869,8 @@ mod tests {
         );
 
         let wt_dir = tmp.path().join("wt");
-        let ctx = MementorContext::with_cwd_and_log_dir(wt_dir, main_dir.clone(), true, None);
+        let ctx =
+            MementorContext::with_cwd_and_log_dir(wt_dir, main_dir.clone(), true, None).unwrap();
         let db = DatabaseDriver::in_memory("enable_reject_wt").unwrap();
         let runtime = Runtime { context: ctx, db };
         let mut io = BufferedIO::new();
@@ -901,7 +902,7 @@ mod tests {
         std::fs::create_dir_all(&subdir).unwrap();
 
         // is_linked_worktree = false: cwd is inside the primary worktree.
-        let ctx = MementorContext::with_cwd_and_log_dir(subdir, root, false, None);
+        let ctx = MementorContext::with_cwd_and_log_dir(subdir, root, false, None).unwrap();
         let db = DatabaseDriver::in_memory("enable_primary_subdir").unwrap();
         let runtime = Runtime { context: ctx, db };
         let mut io = BufferedIO::new();
@@ -937,7 +938,8 @@ mod tests {
         std::fs::create_dir_all(&wt_subdir).unwrap();
 
         // is_linked_worktree = true: cwd is inside a linked worktree.
-        let ctx = MementorContext::with_cwd_and_log_dir(wt_subdir, root.clone(), true, None);
+        let ctx =
+            MementorContext::with_cwd_and_log_dir(wt_subdir, root.clone(), true, None).unwrap();
         let db = DatabaseDriver::in_memory("enable_reject_wt_subdir").unwrap();
         let runtime = Runtime { context: ctx, db };
         let mut io = BufferedIO::new();

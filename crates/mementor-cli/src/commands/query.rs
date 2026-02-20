@@ -28,7 +28,7 @@ where
     }
 
     let conn = runtime.db.open()?;
-    let mut embedder = Embedder::new()?;
+    let mut embedder = Embedder::new(runtime.context.model_cache_dir())?;
 
     let result = search_context(&conn, &mut embedder, text, k, None)?;
 
@@ -46,12 +46,12 @@ mod tests {
     use mementor_lib::embedding::embedder::Embedder;
     use mementor_lib::output::BufferedIO;
 
-    use crate::test_util::{runtime_in_memory, runtime_not_enabled, seed_memory};
+    use crate::test_util::{model_dir, runtime_in_memory, runtime_not_enabled, seed_memory};
 
     #[test]
     fn try_run_query_with_results() {
         let (_tmp, runtime) = runtime_in_memory("query_with_results");
-        let mut embedder = Embedder::new().unwrap();
+        let mut embedder = Embedder::new(&model_dir()).unwrap();
 
         let seed_text = "Implementing authentication in Rust";
         seed_memory(&runtime.db, &mut embedder, "s1", 0, 0, seed_text);

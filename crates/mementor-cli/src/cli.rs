@@ -29,10 +29,26 @@ pub enum Command {
         k: usize,
     },
 
+    /// Manage the embedding model.
+    Model {
+        #[command(subcommand)]
+        model_command: ModelCommand,
+    },
+
     /// Hook subcommands (called by Claude Code lifecycle hooks).
     Hook {
         #[command(subcommand)]
         hook_command: HookCommand,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ModelCommand {
+    /// Download the embedding model files from Hugging Face.
+    Download {
+        /// Force re-download even if files already exist.
+        #[arg(long)]
+        force: bool,
     },
 }
 
