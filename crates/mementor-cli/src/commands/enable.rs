@@ -8,7 +8,7 @@ use mementor_lib::runtime::Runtime;
 /// Run the `mementor enable` command.
 ///
 /// 1. Create `.mementor/` directory and initialize DB with schema.
-/// 2. Verify bundled embedding model loads.
+/// 2. Verify embedding model loads.
 /// 3. Append `.mementor/` to `.gitignore` if not present.
 /// 4. Add mementor hooks to `.claude/settings.json`.
 pub fn run_enable<IN, OUT, ERR>(
@@ -38,7 +38,7 @@ where
 
     // Step 2: Verify embedding model loads
     writeln!(io.stderr(), "Verifying embedding model...")?;
-    let _embedder = Embedder::new()?;
+    let _embedder = Embedder::new(runtime.context.model_cache_dir())?;
     writeln!(io.stderr(), "  Embedding model OK")?;
 
     // Step 3: Update .gitignore

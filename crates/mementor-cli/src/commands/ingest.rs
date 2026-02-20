@@ -3,7 +3,6 @@ use std::path::Path;
 
 use mementor_lib::embedding::embedder::Embedder;
 use mementor_lib::output::ConsoleIO;
-use mementor_lib::pipeline::chunker::load_tokenizer;
 use mementor_lib::pipeline::ingest::run_ingest;
 use mementor_lib::runtime::Runtime;
 
@@ -24,8 +23,7 @@ where
     }
 
     let conn = runtime.db.open()?;
-    let mut embedder = Embedder::new()?;
-    let tokenizer = load_tokenizer()?;
+    let mut embedder = Embedder::new(runtime.context.model_cache_dir())?;
 
     let transcript_path = Path::new(transcript);
     if !transcript_path.exists() {
@@ -37,7 +35,6 @@ where
     run_ingest(
         &conn,
         &mut embedder,
-        &tokenizer,
         session_id,
         transcript_path,
         &cwd,

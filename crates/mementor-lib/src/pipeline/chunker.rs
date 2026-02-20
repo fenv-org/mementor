@@ -150,17 +150,23 @@ fn extract_tail_tokens(text: &str, tokenizer: &Tokenizer, n_tokens: usize) -> St
     tokenizer.decode(tail_ids, true).unwrap_or_default()
 }
 
-/// Load the tokenizer for BGE-small-en-v1.5 from bundled files.
-pub fn load_tokenizer() -> anyhow::Result<Tokenizer> {
-    let tokenizer_bytes = include_bytes!("../../../../models/bge-small-en-v1.5/tokenizer.json");
-    let tokenizer = Tokenizer::from_bytes(tokenizer_bytes)
-        .map_err(|e| anyhow::anyhow!("Failed to load tokenizer: {e}"))?;
-    Ok(tokenizer)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::embedding::embedder::Embedder;
+
+    fn test_tokenizer() -> Tokenizer {
+        let model_dir = std::env::var("MEMENTOR_MODEL_DIR").map_or_else(
+            |_| {
+                dirs::home_dir()
+                    .expect("home dir")
+                    .join(".mementor")
+                    .join("models")
+            },
+            std::path::PathBuf::from,
+        );
+        Embedder::new(&model_dir).unwrap().tokenizer().clone()
+    }
 
     fn make_messages(roles_and_texts: &[(&str, &str)]) -> Vec<ParsedMessage> {
         roles_and_texts
@@ -271,7 +277,7 @@ mod tests {
 
     #[test]
     fn short_turn_single_chunk() {
-        let tokenizer = load_tokenizer().unwrap();
+        let tokenizer = test_tokenizer();
         let turn = Turn {
             line_index: 0,
             provisional: false,
@@ -286,7 +292,7 @@ mod tests {
 
     #[test]
     fn long_turn_multiple_chunks() {
-        let tokenizer = load_tokenizer().unwrap();
+        let tokenizer = test_tokenizer();
         // Generate text longer than 256 tokens
         let long_text = "This is a sentence that adds some tokens. ".repeat(100);
         let turn = Turn {
@@ -311,7 +317,7 @@ mod tests {
 
     #[test]
     fn sub_chunk_overlap_present() {
-        let tokenizer = load_tokenizer().unwrap();
+        let tokenizer = test_tokenizer();
         let long_text = "This is a sentence that adds some tokens. ".repeat(100);
         let turn = Turn {
             line_index: 0,
@@ -333,7 +339,7 @@ mod tests {
 
     #[test]
     fn extract_tail_tokens_basic() {
-        let tokenizer = load_tokenizer().unwrap();
+        let tokenizer = test_tokenizer();
         let text = "Hello world this is a test of the tokenizer";
         let tail = extract_tail_tokens(text, &tokenizer, 3);
         assert!(!tail.is_empty());
@@ -343,7 +349,7 @@ mod tests {
 
     #[test]
     fn extract_tail_tokens_empty_text() {
-        let tokenizer = load_tokenizer().unwrap();
+        let tokenizer = test_tokenizer();
         let tail = extract_tail_tokens("", &tokenizer, 10);
         assert!(tail.is_empty());
     }

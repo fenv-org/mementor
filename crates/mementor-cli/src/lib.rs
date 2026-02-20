@@ -13,7 +13,7 @@ use clap::Parser;
 use mementor_lib::output::ConsoleIO;
 use mementor_lib::runtime::Runtime;
 
-use cli::{Cli, Command, HookCommand};
+use cli::{Cli, Command, HookCommand, ModelCommand};
 
 /// Main CLI entry point. Parses args and dispatches to the appropriate command.
 pub fn try_run<IN, OUT, ERR>(
@@ -35,6 +35,11 @@ where
             session_id,
         } => commands::ingest::run_ingest_cmd(&transcript, &session_id, runtime, io),
         Command::Query { text, k } => commands::query::run_query(&text, k, runtime, io),
+        Command::Model { model_command } => match model_command {
+            ModelCommand::Download { force } => {
+                commands::model::run_model_download(force, runtime, io)
+            }
+        },
         Command::Hook { hook_command } => match hook_command {
             HookCommand::Stop => {
                 let input = hooks::input::read_stop_input(io.stdin())?;

@@ -11,9 +11,27 @@ pub struct MementorContext {
     /// `true` when `cwd` is inside a linked (non-primary) git worktree.
     is_linked_worktree: bool,
     log_dir: Option<PathBuf>,
+    /// Directory where embedding model files are stored.
+    /// Default: `~/.mementor/models/`, override: `MEMENTOR_MODEL_DIR` env var.
+    model_cache_dir: PathBuf,
 }
 
 impl MementorContext {
+    /// Resolve the default model cache directory.
+    ///
+    /// Uses `MEMENTOR_MODEL_DIR` env var if set, otherwise `~/.mementor/models/`.
+    fn default_model_cache_dir() -> PathBuf {
+        std::env::var("MEMENTOR_MODEL_DIR").map_or_else(
+            |_| {
+                dirs::home_dir()
+                    .expect("Could not determine home directory")
+                    .join(".mementor")
+                    .join("models")
+            },
+            PathBuf::from,
+        )
+    }
+
     /// Create a new context rooted at the given path (no log directory).
     ///
     /// Sets `cwd` equal to `project_root`. Use [`Self::with_cwd_and_log_dir`]
@@ -25,6 +43,7 @@ impl MementorContext {
             project_root,
             is_linked_worktree: false,
             log_dir: None,
+            model_cache_dir: Self::default_model_cache_dir(),
         }
     }
 
@@ -38,6 +57,7 @@ impl MementorContext {
             project_root,
             is_linked_worktree: false,
             log_dir,
+            model_cache_dir: Self::default_model_cache_dir(),
         }
     }
 
@@ -57,6 +77,7 @@ impl MementorContext {
             cwd,
             is_linked_worktree,
             log_dir,
+            model_cache_dir: Self::default_model_cache_dir(),
         }
     }
 
@@ -99,6 +120,11 @@ impl MementorContext {
     /// Default: `<project_root>/.mementor/mementor.db`
     pub fn db_path(&self) -> PathBuf {
         self.mementor_dir().join("mementor.db")
+    }
+
+    /// Directory where embedding model files are stored.
+    pub fn model_cache_dir(&self) -> &Path {
+        &self.model_cache_dir
     }
 
     /// Path to the `.mementor/` directory.

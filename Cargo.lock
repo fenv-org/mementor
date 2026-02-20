@@ -1778,6 +1778,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "dirs",
+ "hf-hub 0.5.0",
  "jiff",
  "mementor-lib",
  "mementor-test-util",

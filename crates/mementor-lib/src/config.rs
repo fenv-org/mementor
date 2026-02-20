@@ -1,5 +1,5 @@
-/// Embedding dimension for BGE-small-en-v1.5.
-pub const EMBEDDING_DIMENSION: usize = 384;
+/// Embedding dimension for GTE multilingual base.
+pub const EMBEDDING_DIMENSION: usize = 768;
 
 /// Target chunk size in tokens for markdown-aware sub-chunking.
 pub const CHUNK_TARGET_TOKENS: usize = 256;
@@ -20,16 +20,15 @@ pub const OVER_FETCH_MULTIPLIER: usize = 4;
 /// Maximum cosine distance for a search result to be considered relevant.
 ///
 /// Results with distance above this threshold are discarded.
-/// BGE-small-en-v1.5 cosine distance range: \[0, 2\].
-/// Semantically related content typically falls below 0.40.
+/// GTE multilingual base int8: relevant ≈ 0.19-0.36, irrelevant ≈ 0.38-0.58.
 pub const MAX_COSINE_DISTANCE: f64 = 0.45;
 
 /// Synthetic distance assigned to file-path-only matches in hybrid search.
 ///
 /// Set below `MAX_COSINE_DISTANCE` (0.45) so file matches survive the distance
-/// threshold, but above typical strong semantic matches (~0.30) so they rank
+/// threshold, but above typical strong semantic matches (~0.26) so they rank
 /// lower than genuine vector similarity hits.
-pub const FILE_MATCH_DISTANCE: f64 = 0.40;
+pub const FILE_MATCH_DISTANCE: f64 = 0.35;
 
 /// Minimum number of information units for a prompt to be considered searchable.
 ///

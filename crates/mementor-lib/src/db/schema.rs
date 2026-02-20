@@ -55,6 +55,14 @@ fn migrations() -> Migrations<'static> {
                 UNIQUE(session_id, pr_number)
             );",
         ),
+        // v5: Embedding model switch (384d → 768d). Drop and recreate all
+        // data tables since old embeddings are incompatible.
+        M::up(
+            "DELETE FROM pr_links;
+             DELETE FROM file_mentions;
+             DELETE FROM memories;
+             DELETE FROM sessions;",
+        ),
     ])
 }
 
@@ -153,8 +161,8 @@ mod tests {
         )
         .unwrap();
 
-        // Apply all migrations (v1 already done, so only v2 runs)
-        apply_migrations(&mut conn).unwrap();
+        // Apply only up to v2 (not v5, which clears all data)
+        migrations().to_version(&mut conn, 2).unwrap();
 
         // Verify existing data is preserved
         let (sid, idx): (String, i64) = conn
@@ -297,8 +305,8 @@ mod tests {
         )
         .unwrap();
 
-        // Apply all migrations (v1+v2 already done, so only v3 runs)
-        apply_migrations(&mut conn).unwrap();
+        // Apply only up to v3 (not v5, which clears all data)
+        migrations().to_version(&mut conn, 3).unwrap();
 
         // Verify existing data is preserved
         let (sid, line_idx, compact_idx): (String, i64, Option<i64>) = conn
@@ -399,8 +407,8 @@ mod tests {
         )
         .unwrap();
 
-        // Apply all migrations (v1+v2+v3 already done, so only v4 runs)
-        apply_migrations(&mut conn).unwrap();
+        // Apply only up to v4 (not v5, which clears all data)
+        migrations().to_version(&mut conn, 4).unwrap();
 
         // Verify existing data is preserved
         let (sid, line_idx, compact_idx): (String, i64, Option<i64>) = conn
@@ -444,7 +452,112 @@ mod tests {
     }
 
     #[test]
-    fn zero_to_v4_fresh_install() {
+    fn v4_to_v5_migration_clears_all_data() {
+        let mut conn = Connection::open_in_memory().unwrap();
+
+        // Apply v1-v4 migrations only
+        let v4 = Migrations::new(vec![
+            M::up(
+                "CREATE TABLE sessions (
+                    session_id                TEXT PRIMARY KEY,
+                    transcript_path           TEXT NOT NULL,
+                    project_dir               TEXT NOT NULL,
+                    last_line_index           INTEGER NOT NULL DEFAULT 0,
+                    provisional_turn_start    INTEGER,
+                    created_at                TEXT NOT NULL DEFAULT (datetime('now')),
+                    updated_at                TEXT NOT NULL DEFAULT (datetime('now'))
+                );
+                CREATE TABLE memories (
+                    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id       TEXT NOT NULL REFERENCES sessions(session_id),
+                    line_index       INTEGER NOT NULL,
+                    chunk_index      INTEGER NOT NULL,
+                    role             TEXT NOT NULL,
+                    content          TEXT NOT NULL,
+                    embedding        BLOB,
+                    created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+                    UNIQUE(session_id, line_index, chunk_index)
+                );
+                CREATE INDEX idx_memories_session
+                    ON memories(session_id, line_index);",
+            ),
+            M::up("ALTER TABLE sessions ADD COLUMN last_compact_line_index INTEGER;"),
+            M::up(
+                "CREATE TABLE file_mentions (
+                    session_id   TEXT NOT NULL REFERENCES sessions(session_id),
+                    line_index   INTEGER NOT NULL,
+                    file_path    TEXT NOT NULL,
+                    tool_name    TEXT NOT NULL,
+                    UNIQUE(session_id, line_index, file_path, tool_name)
+                );
+                CREATE INDEX idx_file_mentions_path ON file_mentions(file_path);",
+            ),
+            M::up(
+                "CREATE TABLE pr_links (
+                    session_id    TEXT NOT NULL REFERENCES sessions(session_id),
+                    pr_number     INTEGER NOT NULL,
+                    pr_url        TEXT NOT NULL,
+                    pr_repository TEXT NOT NULL,
+                    timestamp     TEXT NOT NULL,
+                    UNIQUE(session_id, pr_number)
+                );",
+            ),
+        ]);
+        v4.to_latest(&mut conn).unwrap();
+
+        // Insert pre-migration data
+        conn.execute(
+            "INSERT INTO sessions (session_id, transcript_path, project_dir, last_line_index)
+             VALUES ('s1', '/tmp/t.jsonl', '/tmp/p', 10)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO memories (session_id, line_index, chunk_index, role, content)
+             VALUES ('s1', 0, 0, 'turn', 'hello world')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO file_mentions (session_id, line_index, file_path, tool_name)
+             VALUES ('s1', 0, 'src/main.rs', 'Read')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO pr_links (session_id, pr_number, pr_url, pr_repository, timestamp)
+             VALUES ('s1', 14, 'https://github.com/fenv-org/mementor/pull/14', 'fenv-org/mementor', '2026-02-17T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+
+        // Apply all migrations (v1-v4 done, so only v5 runs)
+        apply_migrations(&mut conn).unwrap();
+
+        // All tables should be empty
+        let session_count: i64 = conn
+            .query_row("SELECT count(*) FROM sessions", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(session_count, 0);
+
+        let mem_count: i64 = conn
+            .query_row("SELECT count(*) FROM memories", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(mem_count, 0);
+
+        let fm_count: i64 = conn
+            .query_row("SELECT count(*) FROM file_mentions", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(fm_count, 0);
+
+        let pr_count: i64 = conn
+            .query_row("SELECT count(*) FROM pr_links", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(pr_count, 0);
+    }
+
+    #[test]
+    fn zero_to_v5_fresh_install() {
         let mut conn = Connection::open_in_memory().unwrap();
         apply_migrations(&mut conn).unwrap();
 

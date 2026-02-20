@@ -85,12 +85,12 @@ mod tests {
     use mementor_lib::embedding::embedder::Embedder;
     use mementor_lib::output::BufferedIO;
 
-    use crate::test_util::{runtime_in_memory, runtime_not_enabled, seed_memory};
+    use crate::test_util::{model_dir, runtime_in_memory, runtime_not_enabled, seed_memory};
 
     #[test]
     fn try_run_pre_tool_use_with_file_context() {
         let (_tmp, runtime) = runtime_in_memory("pre_tool_use_ctx");
-        let mut embedder = Embedder::new().unwrap();
+        let mut embedder = Embedder::new(&model_dir()).unwrap();
 
         // Seed a memory with a file mention in another session
         seed_memory(
@@ -154,7 +154,7 @@ mod tests {
     #[test]
     fn try_run_pre_tool_use_notebook_path() {
         let (_tmp, runtime) = runtime_in_memory("pre_tool_use_nb");
-        let mut embedder = Embedder::new().unwrap();
+        let mut embedder = Embedder::new(&model_dir()).unwrap();
 
         seed_memory(
             &runtime.db,

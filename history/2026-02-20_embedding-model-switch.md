@@ -94,16 +94,16 @@ vs disk loading, and DB schema migration.
 - [x] Document results and finalize model choice → GTE multilingual base int8
 
 #### Implementation (GTE multilingual base int8)
-- [ ] Rewrite `Embedder` for disk-based loading via `UserDefinedEmbeddingModel`
-- [ ] Expose `tokenizer()` from Embedder
-- [ ] Add `model_cache_dir` to `MementorContext`
-- [ ] Remove `load_tokenizer()` from chunker
-- [ ] Update `EMBEDDING_DIMENSION` to 768
-- [ ] Add v5 DB migration (clear 384d embeddings)
-- [ ] Update all Embedder call sites (7+ production, tests)
-- [ ] Add `mementor model download` CLI command
-- [ ] Update `main.rs` for model dir resolution
+- [x] Rewrite `Embedder` for disk-based loading via `UserDefinedEmbeddingModel`
+- [x] Expose `tokenizer()` from Embedder
+- [x] Add `model_cache_dir` to `MementorContext`
+- [x] Remove `load_tokenizer()` from chunker
+- [x] Update `EMBEDDING_DIMENSION` to 768
+- [x] Add v5 DB migration (delete all data for clean start)
+- [x] Update all Embedder call sites (7 production, all tests)
+- [x] Add `mementor model download` CLI command
+- [x] Update `main.rs` for model dir resolution (handled by MementorContext defaults)
+- [x] Recalibrate distance thresholds (`FILE_MATCH_DISTANCE` 0.40 → 0.35)
 - [ ] Remove bundled BGE model files
 - [ ] Update scripts, mise.toml, CLAUDE.md
-- [ ] Recalibrate distance thresholds (GTE separation ~0.23)
 - [ ] Remove PoC crate from workspace

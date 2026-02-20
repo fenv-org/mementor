@@ -559,13 +559,13 @@ mod tests {
         upsert_session(&conn, &session).unwrap();
 
         // Insert two memories with different embeddings
-        let emb1 = vec![1.0_f32; 384];
-        let emb2 = vec![0.5_f32; 384];
+        let emb1 = vec![1.0_f32; 768];
+        let emb2 = vec![0.5_f32; 768];
         insert_memory(&conn, "s1", 0, 0, "user", "Hello world", &emb1).unwrap();
         insert_memory(&conn, "s1", 0, 1, "assistant", "Hi there", &emb2).unwrap();
 
         // Search should return results ordered by distance
-        let query = vec![1.0_f32; 384]; // Same as emb1
+        let query = vec![1.0_f32; 768]; // Same as emb1
         let results = search_memories(&conn, &query, 5, None, None).unwrap();
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].content, "Hello world"); // Closest match
@@ -585,7 +585,7 @@ mod tests {
         };
         upsert_session(&conn, &session).unwrap();
 
-        let emb = vec![1.0_f32; 384];
+        let emb = vec![1.0_f32; 768];
         insert_memory(&conn, "s1", 0, 0, "user", "chunk 0-0", &emb).unwrap();
         insert_memory(&conn, "s1", 0, 1, "user", "chunk 0-1", &emb).unwrap();
         insert_memory(&conn, "s1", 2, 0, "user", "chunk 2-0", &emb).unwrap();
@@ -613,7 +613,7 @@ mod tests {
         };
         upsert_session(&conn, &session).unwrap();
 
-        let emb = vec![1.0_f32; 384];
+        let emb = vec![1.0_f32; 768];
         // Turn at line 0: 2 chunks
         insert_memory(&conn, "s1", 0, 0, "turn", "chunk-0-0", &emb).unwrap();
         insert_memory(&conn, "s1", 0, 1, "turn", "chunk-0-1", &emb).unwrap();
