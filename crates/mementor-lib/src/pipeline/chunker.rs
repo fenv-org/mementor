@@ -152,20 +152,13 @@ fn extract_tail_tokens(text: &str, tokenizer: &Tokenizer, n_tokens: usize) -> St
 
 #[cfg(test)]
 mod tests {
+    use mementor_test_util::model::model_dir;
+
     use super::*;
     use crate::embedding::embedder::Embedder;
 
     fn test_tokenizer() -> Tokenizer {
-        let model_dir = std::env::var("MEMENTOR_MODEL_DIR").map_or_else(
-            |_| {
-                dirs::home_dir()
-                    .expect("home dir")
-                    .join(".mementor")
-                    .join("models")
-            },
-            std::path::PathBuf::from,
-        );
-        Embedder::new(&model_dir).unwrap().tokenizer().clone()
+        Embedder::load_tokenizer(&model_dir()).unwrap()
     }
 
     fn make_messages(roles_and_texts: &[(&str, &str)]) -> Vec<ParsedMessage> {

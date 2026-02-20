@@ -647,19 +647,8 @@ pub fn search_file_context(
 mod tests {
     use super::*;
     use crate::db::driver::DatabaseDriver;
+    use mementor_test_util::model::model_dir;
     use mementor_test_util::transcript::{make_entry, make_pr_link_entry, write_transcript};
-
-    fn model_dir() -> std::path::PathBuf {
-        std::env::var("MEMENTOR_MODEL_DIR").map_or_else(
-            |_| {
-                dirs::home_dir()
-                    .expect("home dir")
-                    .join(".mementor")
-                    .join("models")
-            },
-            std::path::PathBuf::from,
-        )
-    }
 
     fn setup_test() -> (tempfile::TempDir, Connection, Embedder) {
         let tmp = tempfile::tempdir().unwrap();

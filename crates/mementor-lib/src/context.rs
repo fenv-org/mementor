@@ -81,6 +81,13 @@ impl MementorContext {
         }
     }
 
+    /// Override the model cache directory.
+    #[must_use]
+    pub fn with_model_cache_dir(mut self, dir: PathBuf) -> Self {
+        self.model_cache_dir = dir;
+        self
+    }
+
     /// Create a context from the current working directory (no log directory).
     pub fn from_cwd() -> anyhow::Result<Self> {
         let cwd = std::env::current_dir()?;
@@ -226,5 +233,15 @@ mod tests {
     fn is_linked_worktree_defaults_to_false() {
         let ctx = MementorContext::new(PathBuf::from("/tmp/project"));
         assert!(!ctx.is_linked_worktree());
+    }
+
+    #[test]
+    fn model_cache_dir_has_default() {
+        let ctx = MementorContext::new(PathBuf::from("/tmp/project"));
+        let dir = ctx.model_cache_dir();
+        assert!(
+            dir.ends_with("models"),
+            "expected path ending in 'models', got {dir:?}"
+        );
     }
 }

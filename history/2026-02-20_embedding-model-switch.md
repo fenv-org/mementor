@@ -107,3 +107,12 @@ vs disk loading, and DB schema migration.
 - [x] Remove bundled BGE model files (`models/bge-small-en-v1.5/`)
 - [x] Update scripts, mise.toml, CLAUDE.md
 - [x] Remove PoC crate from workspace
+
+#### Post-implementation simplification
+- [x] Consolidate 4 duplicated `model_dir()` test helpers into `mementor-test-util`
+- [x] Move `MODEL_SUBDIR` constant to `config.rs` (was duplicated in embedder + downloader)
+- [x] Extract model file name constants to `config.rs` (shared by embedder + downloader)
+- [x] Add `Embedder::load_tokenizer()` for lightweight tokenizer-only loading in tests
+- [x] Add `model_cache_dir()` accessor test in `context.rs`
+- [x] Add `MementorContext::with_model_cache_dir()` builder method
+- [x] Add integration tests for `mementor model download` (cached + force paths)

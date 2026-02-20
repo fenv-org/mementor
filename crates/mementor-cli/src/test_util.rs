@@ -6,23 +6,9 @@ use mementor_lib::db::queries::{Session, insert_memory, upsert_session};
 use mementor_lib::embedding::embedder::Embedder;
 use mementor_lib::runtime::Runtime;
 
-// Re-export shared transcript helpers from mementor-test-util.
+// Re-export shared helpers from mementor-test-util.
+pub use mementor_test_util::model::model_dir;
 pub use mementor_test_util::transcript::{make_entry, make_pr_link_entry, write_transcript};
-
-/// Resolve the embedding model directory for tests.
-///
-/// Uses `MEMENTOR_MODEL_DIR` env var if set, otherwise `~/.mementor/models/`.
-pub fn model_dir() -> PathBuf {
-    std::env::var("MEMENTOR_MODEL_DIR").map_or_else(
-        |_| {
-            dirs::home_dir()
-                .expect("home dir")
-                .join(".mementor")
-                .join("models")
-        },
-        PathBuf::from,
-    )
-}
 
 /// Create a [`Runtime`] with an in-memory database and a tempdir-based context.
 ///

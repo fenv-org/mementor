@@ -7,10 +7,10 @@ use fastembed::{
 };
 use tokenizers::Tokenizer;
 
-use crate::config::EMBEDDING_DIMENSION;
-
-/// Subdirectory name under `model_cache_dir` for GTE multilingual base files.
-const MODEL_SUBDIR: &str = "gte-multilingual-base";
+use crate::config::{
+    EMBEDDING_DIMENSION, MODEL_CONFIG_FILE, MODEL_ONNX_FILE, MODEL_SPECIAL_TOKENS_FILE,
+    MODEL_SUBDIR, MODEL_TOKENIZER_CONFIG_FILE, MODEL_TOKENIZER_FILE,
+};
 
 /// Wrapper around fastembed's `TextEmbedding` model.
 /// Uses GTE multilingual base int8 loaded from disk.
@@ -33,7 +33,7 @@ impl Embedder {
     pub fn new(model_cache_dir: &Path) -> anyhow::Result<Self> {
         let base = model_cache_dir.join(MODEL_SUBDIR);
 
-        let onnx_bytes = fs::read(base.join("model_int8.onnx")).with_context(|| {
+        let onnx_bytes = fs::read(base.join(MODEL_ONNX_FILE)).with_context(|| {
             format!(
                 "Model not found at {}. Run 'mementor model download' first.",
                 base.display()
@@ -41,12 +41,12 @@ impl Embedder {
         })?;
 
         let tokenizer_files = TokenizerFiles {
-            tokenizer_file: fs::read(base.join("tokenizer.json"))
+            tokenizer_file: fs::read(base.join(MODEL_TOKENIZER_FILE))
                 .context("Missing tokenizer.json")?,
-            config_file: fs::read(base.join("config.json")).context("Missing config.json")?,
-            special_tokens_map_file: fs::read(base.join("special_tokens_map.json"))
+            config_file: fs::read(base.join(MODEL_CONFIG_FILE)).context("Missing config.json")?,
+            special_tokens_map_file: fs::read(base.join(MODEL_SPECIAL_TOKENS_FILE))
                 .context("Missing special_tokens_map.json")?,
-            tokenizer_config_file: fs::read(base.join("tokenizer_config.json"))
+            tokenizer_config_file: fs::read(base.join(MODEL_TOKENIZER_CONFIG_FILE))
                 .context("Missing tokenizer_config.json")?,
         };
 
@@ -75,6 +75,18 @@ impl Embedder {
         Ok(embeddings)
     }
 
+    /// Load only the tokenizer without initializing the ONNX model.
+    ///
+    /// Useful when only tokenization is needed (e.g., chunking) and the full
+    /// model initialization overhead is unnecessary.
+    pub fn load_tokenizer(model_cache_dir: &Path) -> anyhow::Result<Tokenizer> {
+        let path = model_cache_dir
+            .join(MODEL_SUBDIR)
+            .join(MODEL_TOKENIZER_FILE);
+        Tokenizer::from_file(&path)
+            .map_err(|e| anyhow::anyhow!("Failed to load tokenizer from {}: {e}", path.display()))
+    }
+
     /// Return the embedding dimension (768 for GTE multilingual base).
     #[must_use]
     pub const fn dimension() -> usize {
@@ -84,19 +96,9 @@ impl Embedder {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use mementor_test_util::model::model_dir;
 
-    fn model_dir() -> std::path::PathBuf {
-        std::env::var("MEMENTOR_MODEL_DIR").map_or_else(
-            |_| {
-                dirs::home_dir()
-                    .expect("home dir")
-                    .join(".mementor")
-                    .join("models")
-            },
-            std::path::PathBuf::from,
-        )
-    }
+    use super::*;
 
     #[test]
     fn embedding_dimension_is_768() {
