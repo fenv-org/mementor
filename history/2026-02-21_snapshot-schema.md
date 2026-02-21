@@ -46,7 +46,16 @@ duplication problem can be solved with a simpler approach.
 - Added `schema:dump` mise task
 - Updated `docs/testing-patterns.md` with Migration Test Patterns section
 - Updated `AGENTS.md` with schema management documentation
-- All 251 tests pass, clippy clean
+- All 254 tests pass, clippy clean
+
+### Code simplifications (post-commit)
+
+- Replaced custom `OptionalExt` trait with `rusqlite::OptionalExtension`
+- Extracted `format_memories()` helper to deduplicate memory-formatting code
+  in `search_context` and `search_file_context`
+- Fixed `upsert_session` to include `last_compact_line_index` in INSERT and
+  ON CONFLICT clauses (previously silently dropped; workaround raw SQL removed)
+- Simplified `embed_batch` closure to method reference
 
 ## TODO
 
@@ -57,7 +66,7 @@ duplication problem can be solved with a simpler approach.
 - [x] Create `mementor-schema-gen` crate
 - [x] Update `docs/testing-patterns.md` and `AGENTS.md`
 - [x] Verify: clippy and tests pass
-- [ ] Commit and create PR
+- [x] Commit and create PR
 
 ## Future work
 
