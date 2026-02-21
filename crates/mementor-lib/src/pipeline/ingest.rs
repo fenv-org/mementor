@@ -5,19 +5,15 @@
 )]
 
 use std::borrow::Cow;
-use std::collections::HashMap;
-use std::fmt::Write as _;
 use std::path::Path;
 
 use anyhow::Context;
 use rusqlite::Connection;
 use tracing::{debug, info};
 
-use crate::config::{FILE_MATCH_DISTANCE, MAX_COSINE_DISTANCE, OVER_FETCH_MULTIPLIER};
 use crate::db::queries::{
-    self, Session, delete_file_mentions_at, delete_memories_at, get_turns_chunks,
-    insert_file_mention, insert_memory, insert_pr_link, search_by_file_path, search_memories,
-    upsert_session,
+    self, Session, delete_turn_at, insert_chunk, insert_entry, insert_file_mention, insert_pr_link,
+    upsert_session, upsert_turn,
 };
 use crate::embedding::embedder::Embedder;
 use crate::pipeline::chunker::{chunk_turn, group_into_turns};
@@ -177,35 +173,16 @@ fn extract_at_mentions(turn_text: &str, project_dir: &str, project_root: &str) -
     result
 }
 
-/// Extract file path hints from a query string for hybrid search.
-///
-/// Identifies tokens that look like file paths or file names based on
-/// heuristics: contains `/` or ends with a known file extension.
-pub fn extract_file_hints(query: &str) -> Vec<&str> {
-    let mut hints: Vec<&str> = query
-        .split_whitespace()
-        .map(|t| {
-            t.trim_matches(|c: char| {
-                c == '`' || c == '\'' || c == '"' || c == '?' || c == ',' || c == ';' || c == ':'
-            })
-        })
-        .filter(|t| looks_like_path(t))
-        .collect();
-    hints.sort_unstable();
-    hints.dedup();
-    hints
-}
-
 /// Run the incremental ingest pipeline for a single session.
 ///
 /// 1. Read new messages from the transcript starting at `last_line_index`.
-/// 2. If a provisional turn exists, complete it with the new User message.
-/// 3. Process all complete turns (chunk -> embed -> store).
-/// 4. Store the last turn as provisional.
+/// 2. Insert raw entries into the `entries` table.
+/// 3. If a provisional turn exists, delete it (CASCADE handles chunks + `file_mentions`).
+/// 4. Process all turns: chunk -> embed -> store (turn + chunks + `file_mentions`).
 /// 5. Update session state.
 #[allow(clippy::too_many_lines)]
 pub fn run_ingest(
-    conn: &Connection,
+    conn: &mut Connection,
     embedder: &mut Embedder,
     session_id: &str,
     transcript_path: &Path,
@@ -232,37 +209,25 @@ pub fn run_ingest(
     // Parse new messages from the transcript starting at start_line.
     // If there's a provisional turn, re-read from its start to re-process it.
     let read_from = provisional_start.unwrap_or(start_line);
-    let ParseResult { messages, pr_links } = parse_transcript(transcript_path, read_from)?;
+    let ParseResult {
+        messages,
+        pr_links,
+        raw_entries,
+    } = parse_transcript(transcript_path, read_from)?;
     debug!(
         session_id = %session_id,
         read_from = read_from,
         message_count = messages.len(),
         pr_link_count = pr_links.len(),
+        raw_entry_count = raw_entries.len(),
         "Parsed transcript messages"
     );
-    if messages.is_empty() && pr_links.is_empty() {
-        debug!("No new messages found in transcript");
+    if messages.is_empty() && pr_links.is_empty() && raw_entries.is_empty() {
+        debug!("No new data found in transcript");
         return Ok(());
     }
 
-    // Group messages into turns
-    let turns = group_into_turns(&messages);
-    debug!(
-        session_id = %session_id,
-        turn_count = turns.len(),
-        "Grouped messages into turns"
-    );
-    for (i, turn) in turns.iter().enumerate() {
-        debug!(
-            turn_index = i,
-            line_index = turn.line_index,
-            provisional = turn.provisional,
-            text_len = turn.text.len(),
-            text = %turn.text,
-            "Turn detail"
-        );
-    }
-    // Ensure session record exists (required for foreign key on memories table)
+    // Ensure session record exists (required for foreign keys)
     if session.is_none() {
         upsert_session(
             conn,
@@ -270,11 +235,32 @@ pub fn run_ingest(
                 session_id: session_id.to_string(),
                 transcript_path: transcript_path.to_string_lossy().to_string(),
                 project_dir: project_dir.to_string(),
+                started_at: None,
                 last_line_index: read_from,
                 provisional_turn_start: None,
                 last_compact_line_index: None,
             },
         )?;
+    }
+
+    // Insert raw entries into the entries table (INSERT OR IGNORE for idempotency)
+    for entry in &raw_entries {
+        insert_entry(
+            conn,
+            session_id,
+            entry.line_index,
+            &entry.entry_type,
+            &entry.content,
+            &entry.tool_summary,
+            entry.timestamp.as_deref(),
+        )?;
+    }
+    if !raw_entries.is_empty() {
+        debug!(
+            session_id = %session_id,
+            count = raw_entries.len(),
+            "Inserted raw entries"
+        );
     }
 
     // Insert PR links (idempotent via INSERT OR IGNORE)
@@ -296,18 +282,53 @@ pub fn run_ingest(
         );
     }
 
+    // Group messages into turns
+    let turns = group_into_turns(&messages);
+    debug!(
+        session_id = %session_id,
+        turn_count = turns.len(),
+        "Grouped messages into turns"
+    );
+    for (i, turn) in turns.iter().enumerate() {
+        debug!(
+            turn_index = i,
+            start_line = turn.start_line,
+            end_line = turn.end_line,
+            provisional = turn.provisional,
+            text_len = turn.full_text.len(),
+            "Turn detail"
+        );
+    }
+
     if turns.is_empty() {
         debug!("No turns formed from messages");
+        // Still update session to advance past raw entries / PR links
+        let max_line = raw_entries
+            .iter()
+            .map(|e| e.line_index)
+            .chain(pr_links.iter().map(|p| p.line_index))
+            .max();
+        if let Some(max) = max_line {
+            upsert_session(
+                conn,
+                &Session {
+                    session_id: session_id.to_string(),
+                    transcript_path: transcript_path.to_string_lossy().to_string(),
+                    project_dir: project_dir.to_string(),
+                    started_at: None,
+                    last_line_index: max + 1,
+                    provisional_turn_start: None,
+                    last_compact_line_index: session.and_then(|s| s.last_compact_line_index),
+                },
+            )?;
+        }
         return Ok(());
     }
 
-    // If a provisional turn existed, delete its old chunks and file mentions
+    // If a provisional turn existed, delete it (CASCADE cleans chunks + file_mentions)
     if let Some(prov_line) = provisional_start {
-        let deleted = delete_memories_at(conn, session_id, prov_line)?;
-        let deleted_mentions = delete_file_mentions_at(conn, session_id, prov_line)?;
-        debug!(
-            "Deleted {deleted} provisional chunks and {deleted_mentions} file mentions at line_index={prov_line}"
-        );
+        let deleted = delete_turn_at(conn, session_id, prov_line)?;
+        debug!("Deleted {deleted} provisional turn at start_line={prov_line}");
     }
 
     // Process each turn: chunk -> embed -> store
@@ -318,7 +339,7 @@ pub fn run_ingest(
         let chunks = chunk_turn(turn, &tokenizer);
         debug!(
             session_id = %session_id,
-            line_index = turn.line_index,
+            start_line = turn.start_line,
             chunk_count = chunks.len(),
             provisional = turn.provisional,
             "Chunked turn"
@@ -327,50 +348,50 @@ pub fn run_ingest(
             continue;
         }
 
-        // Embed all chunks in this turn as a batch
+        // Embed all chunks OUTSIDE the transaction (avoid holding write lock during inference)
         let texts: Vec<&str> = chunks.iter().map(|c| c.text.as_str()).collect();
         let embeddings = embedder.embed_batch(&texts).with_context(|| {
             format!(
                 "Failed to embed chunks for turn at line {}",
-                turn.line_index
+                turn.start_line
             )
         })?;
 
-        // Store each chunk with its embedding
-        let role = if turn.is_compaction_summary {
-            "compaction_summary"
-        } else {
-            "turn"
-        };
+        // Transaction: upsert turn + insert chunks + insert file mentions
+        let tx = conn.transaction()?;
+
+        let turn_id = upsert_turn(
+            &tx,
+            session_id,
+            turn.start_line,
+            turn.end_line,
+            turn.provisional,
+            &turn.full_text,
+        )?;
+
         for (chunk, embedding) in chunks.iter().zip(embeddings.iter()) {
-            insert_memory(
-                conn,
-                session_id,
-                chunk.line_index,
-                chunk.chunk_index,
-                role,
-                &chunk.text,
-                embedding,
-            )?;
+            insert_chunk(&tx, turn_id, chunk.chunk_index, embedding)?;
         }
 
         // Extract and store file mentions from tool summaries
         let file_paths = extract_file_paths(&turn.tool_summary, project_dir, project_root);
         for (file_path, tool_name) in &file_paths {
-            insert_file_mention(conn, session_id, turn.line_index, file_path, tool_name)?;
+            insert_file_mention(&tx, turn_id, file_path, tool_name)?;
         }
 
         // Extract and store @-mentioned file paths from user text
-        let at_mentions = extract_at_mentions(&turn.text, project_dir, project_root);
+        let at_mentions = extract_at_mentions(&turn.full_text, project_dir, project_root);
         for file_path in &at_mentions {
-            insert_file_mention(conn, session_id, turn.line_index, file_path, "mention")?;
+            insert_file_mention(&tx, turn_id, file_path, "mention")?;
         }
+
+        tx.commit()?;
 
         let total_files = file_paths.len() + at_mentions.len();
         if total_files > 0 {
             debug!(
                 session_id = %session_id,
-                line_index = turn.line_index,
+                start_line = turn.start_line,
                 tool_files = file_paths.len(),
                 at_mentions = at_mentions.len(),
                 "Stored file mentions"
@@ -378,11 +399,11 @@ pub fn run_ingest(
         }
 
         if turn.provisional {
-            new_provisional_start = Some(turn.line_index);
+            new_provisional_start = Some(turn.start_line);
         }
 
         // Update last_line_index to be beyond all messages in this turn
-        last_line_index = turn.line_index + 2;
+        last_line_index = turn.start_line + 2;
     }
 
     // Ensure last_line_index covers all parsed messages
@@ -400,6 +421,7 @@ pub fn run_ingest(
             session_id: session_id.to_string(),
             transcript_path: transcript_path.to_string_lossy().to_string(),
             project_dir: project_dir.to_string(),
+            started_at: None,
             last_line_index,
             provisional_turn_start: new_provisional_start,
             last_compact_line_index: session.and_then(|s| s.last_compact_line_index),
@@ -414,233 +436,6 @@ pub fn run_ingest(
     );
 
     Ok(())
-}
-
-/// Look up the compaction boundary for a session.
-fn compact_boundary_for(
-    conn: &Connection,
-    session_id: Option<&str>,
-) -> anyhow::Result<Option<usize>> {
-    Ok(session_id
-        .map(|sid| queries::get_session(conn, sid))
-        .transpose()?
-        .flatten()
-        .and_then(|s| s.last_compact_line_index))
-}
-
-/// Search memories across all sessions for the given query text.
-///
-/// Returns formatted context string suitable for injecting into a prompt.
-/// Applies an 8-phase hybrid filter pipeline:
-/// 1. Embed query
-/// 2. Extract file hints from query text
-/// 3. Vector over-fetch + in-context filter (SQL-level)
-/// 4. File path search (if file hints found)
-/// 5. Distance threshold on vector results
-/// 6. Merge vector + file results
-/// 7. Sort, truncate to k
-/// 8. Reconstruct full turn text + format output
-#[allow(clippy::too_many_lines)]
-pub fn search_context(
-    conn: &Connection,
-    embedder: &mut Embedder,
-    query: &str,
-    k: usize,
-    session_id: Option<&str>,
-) -> anyhow::Result<String> {
-    debug!(
-        query_len = query.len(),
-        query = %query,
-        k = k,
-        session_id = ?session_id,
-        "Searching memories"
-    );
-
-    // Phase 1: Embed query
-    let embeddings = embedder.embed_batch(&[query])?;
-    let query_embedding = &embeddings[0];
-
-    // Phase 2: Extract file hints from query text
-    let file_hints = extract_file_hints(query);
-    debug!(
-        file_hint_count = file_hints.len(),
-        file_hints = ?file_hints,
-        "Phase 2: file hints extracted"
-    );
-
-    // Look up compaction boundary for the current session
-    let compact_boundary = compact_boundary_for(conn, session_id)?;
-
-    // Phase 3: Vector over-fetch + in-context filter (SQL)
-    let k_internal = k * OVER_FETCH_MULTIPLIER;
-    let candidates = search_memories(
-        conn,
-        query_embedding,
-        k_internal,
-        session_id,
-        compact_boundary,
-    )?;
-
-    debug!(
-        candidates = candidates.len(),
-        k_internal = k_internal,
-        "Phase 3: vector over-fetch + in-context filter"
-    );
-
-    // Phase 4: File path search (skip if no file hints)
-    let file_results = if file_hints.is_empty() {
-        Vec::new()
-    } else {
-        search_by_file_path(conn, &file_hints, session_id, compact_boundary, k_internal)?
-    };
-
-    debug!(
-        file_results = file_results.len(),
-        "Phase 4: file path search"
-    );
-
-    // Phase 5: Distance threshold on vector results
-    let after_threshold: Vec<_> = candidates
-        .into_iter()
-        .filter(|r| r.distance <= MAX_COSINE_DISTANCE)
-        .collect();
-
-    debug!(
-        after_threshold = after_threshold.len(),
-        threshold = MAX_COSINE_DISTANCE,
-        "Phase 5: distance threshold"
-    );
-
-    // Phase 6: Merge — HashMap<(session_id, line_index), f64>
-    let mut merged: HashMap<(String, usize), f64> = HashMap::new();
-
-    // Add vector results (best distance per turn)
-    for result in &after_threshold {
-        let key = (result.session_id.clone(), result.line_index);
-        let d = merged.entry(key).or_insert(f64::MAX);
-        *d = d.min(result.distance);
-    }
-
-    // Add file results (keep the lower distance if vector match already exists)
-    for (sid, line_idx) in &file_results {
-        let key = (sid.clone(), *line_idx);
-        let d = merged.entry(key).or_insert(f64::MAX);
-        *d = d.min(FILE_MATCH_DISTANCE);
-    }
-
-    debug!(merged_count = merged.len(), "Phase 6: merge results");
-
-    if merged.is_empty() {
-        debug!("No search results found after merge");
-        return Ok(String::new());
-    }
-
-    // Phase 7: Sort by distance + truncate to k
-    let mut sorted: Vec<_> = merged.into_iter().collect();
-    sorted.sort_by(|a, b| a.1.total_cmp(&b.1));
-    sorted.truncate(k);
-
-    debug!(final_count = sorted.len(), "Phase 7: sort + truncate");
-
-    // Phase 8: Reconstruct full turn text + format output
-    let turn_keys: Vec<(&str, usize)> = sorted
-        .iter()
-        .map(|((sid, line_idx), _)| (sid.as_str(), *line_idx))
-        .collect();
-    let turn_texts = get_turns_chunks(conn, &turn_keys)?;
-
-    debug!(
-        reconstructed_turns = turn_texts.len(),
-        "Phase 8: reconstruct turns"
-    );
-
-    for (i, ((sid, line_idx), distance)) in sorted.iter().enumerate() {
-        debug!(
-            rank = i + 1,
-            distance = distance,
-            result_session_id = %sid,
-            line_index = line_idx,
-            "Search result"
-        );
-    }
-
-    let entries: Vec<_> = sorted.iter().map(|((s, l), _)| (s.clone(), *l)).collect();
-    let dists: Vec<_> = sorted.iter().map(|((_, _), d)| *d).collect();
-    Ok(format_memories(
-        "## Relevant past context\n\n",
-        &entries,
-        Some(&dists),
-        &turn_texts,
-    ))
-}
-
-/// Format search results into markdown memory entries.
-///
-/// Returns an empty string if no entries have non-empty content.
-fn format_memories(
-    header: &str,
-    entries: &[(String, usize)],
-    distances: Option<&[f64]>,
-    turn_texts: &HashMap<(String, usize), Vec<String>>,
-) -> String {
-    let mut ctx = String::from(header);
-    let initial_len = ctx.len();
-    for (i, (sid, line_idx)) in entries.iter().enumerate() {
-        let Some(chunks) = turn_texts.get(&(sid.clone(), *line_idx)) else {
-            continue;
-        };
-        let full_text = chunks.join("\n\n");
-        if full_text.is_empty() {
-            continue;
-        }
-        let dist_suffix =
-            distances.map_or_else(String::new, |d| format!(" (distance: {:.4})", d[i]));
-        write!(
-            &mut ctx,
-            "### Memory {}{dist_suffix}\n{full_text}\n\n",
-            i + 1
-        )
-        .unwrap();
-    }
-    if ctx.len() > initial_len {
-        ctx
-    } else {
-        String::new()
-    }
-}
-
-/// Search file mentions for past context about a specific file path.
-///
-/// Pure file-path search without embedding computation. Used by the
-/// `PreToolUse` hook for fast context injection.
-pub fn search_file_context(
-    conn: &Connection,
-    file_path: &str,
-    project_dir: &str,
-    project_root: &str,
-    k: usize,
-    session_id: Option<&str>,
-) -> anyhow::Result<String> {
-    let Some(normalized) = normalize_path(file_path, project_dir, project_root) else {
-        return Ok(String::new());
-    };
-
-    let compact_boundary = compact_boundary_for(conn, session_id)?;
-
-    let results = search_by_file_path(conn, &[&normalized], session_id, compact_boundary, k)?;
-
-    if results.is_empty() {
-        return Ok(String::new());
-    }
-
-    let turn_keys: Vec<(&str, usize)> = results
-        .iter()
-        .map(|(sid, line_idx)| (sid.as_str(), *line_idx))
-        .collect();
-    let turn_texts = get_turns_chunks(conn, &turn_keys)?;
-
-    let header = format!("## Past context for {normalized}\n\n");
-    Ok(format_memories(&header, &results, None, &turn_texts))
 }
 
 #[cfg(test)]
@@ -661,7 +456,7 @@ mod tests {
 
     #[test]
     fn first_ingestion_creates_provisional() {
-        let (tmp, conn, mut embedder) = setup_test();
+        let (tmp, mut conn, mut embedder) = setup_test();
 
         let lines = vec![
             make_entry("user", "Hello, how are you?"),
@@ -671,7 +466,7 @@ mod tests {
         let transcript = write_transcript(tmp.path(), &line_refs);
 
         run_ingest(
-            &conn,
+            &mut conn,
             &mut embedder,
             "s1",
             &transcript,
@@ -683,11 +478,37 @@ mod tests {
         let session = queries::get_session(&conn, "s1").unwrap().unwrap();
         assert!(session.provisional_turn_start.is_some());
         assert_eq!(session.last_line_index, 2);
+
+        // Verify entries were stored
+        let entry_count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM entries WHERE session_id = 's1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(entry_count, 2);
+
+        // Verify turn was stored
+        let turn_count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM turns WHERE session_id = 's1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(turn_count, 1);
+
+        // Verify chunks were stored
+        let chunk_count: i64 = conn
+            .query_row("SELECT count(*) FROM chunks", [], |row| row.get(0))
+            .unwrap();
+        assert!(chunk_count > 0);
     }
 
     #[test]
     fn second_ingestion_completes_provisional() {
-        let (tmp, conn, mut embedder) = setup_test();
+        let (tmp, mut conn, mut embedder) = setup_test();
 
         // First ingestion: User + Assistant (provisional)
         let lines1 = vec![
@@ -696,7 +517,15 @@ mod tests {
         ];
         let refs1: Vec<&str> = lines1.iter().map(String::as_str).collect();
         let transcript = write_transcript(tmp.path(), &refs1);
-        run_ingest(&conn, &mut embedder, "s1", &transcript, "/tmp/p", "/tmp/p").unwrap();
+        run_ingest(
+            &mut conn,
+            &mut embedder,
+            "s1",
+            &transcript,
+            "/tmp/p",
+            "/tmp/p",
+        )
+        .unwrap();
 
         // Second ingestion: Append another pair
         let lines2 = vec![
@@ -710,46 +539,45 @@ mod tests {
         ];
         let refs2: Vec<&str> = lines2.iter().map(String::as_str).collect();
         let transcript = write_transcript(tmp.path(), &refs2);
-        run_ingest(&conn, &mut embedder, "s1", &transcript, "/tmp/p", "/tmp/p").unwrap();
+        run_ingest(
+            &mut conn,
+            &mut embedder,
+            "s1",
+            &transcript,
+            "/tmp/p",
+            "/tmp/p",
+        )
+        .unwrap();
 
         let session = queries::get_session(&conn, "s1").unwrap().unwrap();
         // Turn 2 should be provisional
         assert!(session.provisional_turn_start.is_some());
         assert_eq!(session.last_line_index, 4);
-    }
 
-    #[test]
-    fn search_returns_relevant_results() {
-        let (tmp, conn, mut embedder) = setup_test();
-
-        let lines = vec![
-            make_entry("user", "How do I implement authentication in Rust?"),
-            make_entry(
-                "assistant",
-                "You can use JWT tokens with the jsonwebtoken crate.",
-            ),
-            make_entry("user", "What about database connections?"),
-            make_entry(
-                "assistant",
-                "Use sqlx or diesel for database access in Rust.",
-            ),
-        ];
-        let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
-        let transcript = write_transcript(tmp.path(), &refs);
-        run_ingest(&conn, &mut embedder, "s1", &transcript, "/tmp/p", "/tmp/p").unwrap();
-
-        // Search from a different session to test cross-session recall
-        // (same-session without compaction boundary is filtered out)
-        let ctx = search_context(&conn, &mut embedder, "authentication", 5, Some("other")).unwrap();
-        assert!(!ctx.is_empty());
-        assert!(ctx.contains("Relevant past context"));
+        // Should have 2 turns
+        let turn_count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM turns WHERE session_id = 's1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(turn_count, 2);
     }
 
     #[test]
     fn empty_transcript_is_handled() {
-        let (tmp, conn, mut embedder) = setup_test();
+        let (tmp, mut conn, mut embedder) = setup_test();
         let transcript = write_transcript(tmp.path(), &[]);
-        run_ingest(&conn, &mut embedder, "s1", &transcript, "/tmp/p", "/tmp/p").unwrap();
+        run_ingest(
+            &mut conn,
+            &mut embedder,
+            "s1",
+            &transcript,
+            "/tmp/p",
+            "/tmp/p",
+        )
+        .unwrap();
 
         let session = queries::get_session(&conn, "s1").unwrap();
         assert!(session.is_none());
@@ -757,7 +585,7 @@ mod tests {
 
     #[test]
     fn re_ingestion_is_idempotent() {
-        let (tmp, conn, mut embedder) = setup_test();
+        let (tmp, mut conn, mut embedder) = setup_test();
 
         let lines = vec![
             make_entry("user", "Hello"),
@@ -767,163 +595,34 @@ mod tests {
         let transcript = write_transcript(tmp.path(), &refs);
 
         // Ingest twice with the same data
-        run_ingest(&conn, &mut embedder, "s1", &transcript, "/tmp/p", "/tmp/p").unwrap();
-        run_ingest(&conn, &mut embedder, "s1", &transcript, "/tmp/p", "/tmp/p").unwrap();
-
-        // Should still have data — no duplicates (INSERT OR REPLACE handles this)
-        let emb = embedder.embed_batch(&["Hello"]).unwrap();
-        let results = search_memories(&conn, &emb[0], 10, None, None).unwrap();
-        assert!(!results.is_empty());
-    }
-
-    // --- Filter pipeline tests ---
-
-    /// Helper: seed a memory with real embedding into a session.
-    fn seed_memory(
-        conn: &Connection,
-        embedder: &mut Embedder,
-        session_id: &str,
-        line_index: usize,
-        chunk_index: usize,
-        text: &str,
-    ) {
-        let embs = embedder.embed_batch(&[text]).unwrap();
-        insert_memory(
-            conn,
-            session_id,
-            line_index,
-            chunk_index,
-            "turn",
-            text,
-            &embs[0],
-        )
-        .unwrap();
-    }
-
-    /// Helper: ensure session exists with optional compaction boundary.
-    fn ensure_session(
-        conn: &Connection,
-        session_id: &str,
-        last_line: usize,
-        compact_line: Option<usize>,
-    ) {
-        upsert_session(
-            conn,
-            &Session {
-                session_id: session_id.to_string(),
-                transcript_path: "/test/t.jsonl".to_string(),
-                project_dir: "/test/p".to_string(),
-                last_line_index: last_line,
-                provisional_turn_start: None,
-                last_compact_line_index: compact_line,
-            },
-        )
-        .unwrap();
-    }
-
-    #[test]
-    fn in_context_results_filtered_out() {
-        let (_tmp, conn, mut embedder) = setup_test();
-
-        ensure_session(&conn, "s1", 10, None);
-        seed_memory(&conn, &mut embedder, "s1", 0, 0, "Rust authentication");
-
-        // Search from same session with no compaction boundary → all filtered
-        let ctx =
-            search_context(&conn, &mut embedder, "Rust authentication", 5, Some("s1")).unwrap();
-        assert!(ctx.is_empty());
-    }
-
-    #[test]
-    fn pre_compaction_results_retained() {
-        let (_tmp, conn, mut embedder) = setup_test();
-
-        // Memory at line 2, compaction boundary at line 5 → memory is pre-compaction
-        ensure_session(&conn, "s1", 10, Some(5));
-        seed_memory(&conn, &mut embedder, "s1", 2, 0, "Rust authentication");
-
-        let ctx =
-            search_context(&conn, &mut embedder, "Rust authentication", 5, Some("s1")).unwrap();
-        assert!(!ctx.is_empty());
-        assert!(ctx.contains("Relevant past context"));
-    }
-
-    #[test]
-    fn post_compaction_results_filtered_out() {
-        let (_tmp, conn, mut embedder) = setup_test();
-
-        // Memory at line 8, compaction boundary at line 5 → memory is post-compaction (in-context)
-        ensure_session(&conn, "s1", 10, Some(5));
-        seed_memory(&conn, &mut embedder, "s1", 8, 0, "Rust authentication");
-
-        let ctx =
-            search_context(&conn, &mut embedder, "Rust authentication", 5, Some("s1")).unwrap();
-        assert!(ctx.is_empty());
-    }
-
-    #[test]
-    fn cross_session_results_always_returned() {
-        let (_tmp, conn, mut embedder) = setup_test();
-
-        ensure_session(&conn, "s1", 10, None);
-        seed_memory(&conn, &mut embedder, "s1", 0, 0, "Rust authentication");
-
-        // Search from different session → always returned
-        let ctx =
-            search_context(&conn, &mut embedder, "Rust authentication", 5, Some("s2")).unwrap();
-        assert!(!ctx.is_empty());
-        assert!(ctx.contains("Relevant past context"));
-    }
-
-    #[test]
-    fn distance_threshold_filters_irrelevant() {
-        let (_tmp, conn, mut embedder) = setup_test();
-
-        ensure_session(&conn, "s1", 10, None);
-        // Seed a memory with completely unrelated content
-        seed_memory(
-            &conn,
+        run_ingest(
+            &mut conn,
             &mut embedder,
             "s1",
-            0,
-            0,
-            "The quick brown fox jumps over the lazy dog",
-        );
-
-        // Search with a very different topic from a different session
-        let ctx = search_context(
-            &conn,
-            &mut embedder,
-            "quantum physics dark matter equations",
-            5,
-            Some("other"),
+            &transcript,
+            "/tmp/p",
+            "/tmp/p",
         )
         .unwrap();
-        // The distance between these unrelated texts should exceed the threshold
-        // If not empty, at least the result must have distance below MAX_COSINE_DISTANCE
-        // This test verifies the threshold mechanism exists and filters
-        // (exact behavior depends on embedding model)
-        if !ctx.is_empty() {
-            assert!(ctx.contains("Relevant past context"));
-        }
-    }
+        run_ingest(
+            &mut conn,
+            &mut embedder,
+            "s1",
+            &transcript,
+            "/tmp/p",
+            "/tmp/p",
+        )
+        .unwrap();
 
-    #[test]
-    fn turn_dedup_reconstructs_full_turn() {
-        let (_tmp, conn, mut embedder) = setup_test();
-
-        ensure_session(&conn, "s1", 10, None);
-        // Simulate a multi-chunk turn: same session + line_index, different chunk_index
-        seed_memory(&conn, &mut embedder, "s1", 0, 0, "chunk zero content");
-        seed_memory(&conn, &mut embedder, "s1", 0, 1, "chunk one content");
-
-        // Search from different session to avoid in-context filter
-        let ctx =
-            search_context(&conn, &mut embedder, "chunk zero content", 5, Some("other")).unwrap();
-        assert!(!ctx.is_empty());
-        // The reconstructed turn should contain BOTH chunks
-        assert!(ctx.contains("chunk zero content"));
-        assert!(ctx.contains("chunk one content"));
+        // Should still have exactly 1 turn
+        let turn_count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM turns WHERE session_id = 's1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(turn_count, 1);
     }
 
     // --- normalize_path tests ---
@@ -1154,38 +853,6 @@ mod tests {
         assert!(result.is_empty());
     }
 
-    // --- extract_file_hints tests ---
-
-    #[test]
-    fn extract_file_hints_with_extension() {
-        let hints = extract_file_hints("What does main.rs do?");
-        assert_eq!(hints, vec!["main.rs"]);
-    }
-
-    #[test]
-    fn extract_file_hints_with_path() {
-        let hints = extract_file_hints("explain src/pipeline/ingest.rs");
-        assert_eq!(hints, vec!["src/pipeline/ingest.rs"]);
-    }
-
-    #[test]
-    fn extract_file_hints_with_backticks() {
-        let hints = extract_file_hints("what is `src/main.rs`?");
-        assert_eq!(hints, vec!["src/main.rs"]);
-    }
-
-    #[test]
-    fn extract_file_hints_no_matches() {
-        let hints = extract_file_hints("how do I implement authentication");
-        assert!(hints.is_empty());
-    }
-
-    #[test]
-    fn extract_file_hints_multiple() {
-        let hints = extract_file_hints("compare ingest.rs and chunker.rs");
-        assert_eq!(hints, vec!["chunker.rs", "ingest.rs"]);
-    }
-
     // --- extract_quoted_value tests ---
 
     #[test]
@@ -1208,45 +875,8 @@ mod tests {
     }
 
     #[test]
-    fn results_truncated_to_k() {
-        let (_tmp, conn, mut embedder) = setup_test();
-
-        ensure_session(&conn, "s1", 20, None);
-        // Seed more unique turns than k=2
-        seed_memory(&conn, &mut embedder, "s1", 0, 0, "Rust ownership model");
-        seed_memory(&conn, &mut embedder, "s1", 2, 0, "Rust borrowing rules");
-        seed_memory(
-            &conn,
-            &mut embedder,
-            "s1",
-            4,
-            0,
-            "Rust lifetime annotations",
-        );
-        seed_memory(
-            &conn,
-            &mut embedder,
-            "s1",
-            6,
-            0,
-            "Rust trait implementations",
-        );
-
-        // Search with k=2 from different session
-        let ctx =
-            search_context(&conn, &mut embedder, "Rust programming", 2, Some("other")).unwrap();
-
-        // Count the number of "### Memory" headers — should be at most 2
-        let memory_count = ctx.matches("### Memory").count();
-        assert!(
-            memory_count <= 2,
-            "Expected at most 2 results, got {memory_count}"
-        );
-    }
-
-    #[test]
     fn ingest_stores_pr_links() {
-        let (tmp, conn, mut embedder) = setup_test();
+        let (tmp, mut conn, mut embedder) = setup_test();
 
         let lines = vec![
             make_entry("user", "Hello"),
@@ -1261,7 +891,15 @@ mod tests {
         let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
         let transcript = write_transcript(tmp.path(), &refs);
 
-        run_ingest(&conn, &mut embedder, "s1", &transcript, "/tmp/p", "/tmp/p").unwrap();
+        run_ingest(
+            &mut conn,
+            &mut embedder,
+            "s1",
+            &transcript,
+            "/tmp/p",
+            "/tmp/p",
+        )
+        .unwrap();
 
         assert_eq!(
             queries::get_pr_links_for_session(&conn, "s1").unwrap(),
@@ -1276,34 +914,8 @@ mod tests {
     }
 
     #[test]
-    fn compaction_summary_stored_with_role() {
-        let (tmp, conn, mut embedder) = setup_test();
-
-        let prefix = crate::config::COMPACTION_SUMMARY_PREFIX;
-        let summary_text = format!("{prefix}. The previous session explored Rust error handling.");
-
-        let lines = vec![
-            make_entry("user", &summary_text),
-            make_entry("assistant", "I understand the context."),
-        ];
-        let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
-        let transcript = write_transcript(tmp.path(), &refs);
-
-        run_ingest(&conn, &mut embedder, "s1", &transcript, "/tmp/p", "/tmp/p").unwrap();
-
-        let role: String = conn
-            .query_row(
-                "SELECT role FROM memories WHERE session_id = 's1' AND line_index = 0 LIMIT 1",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(role, "compaction_summary");
-    }
-
-    #[test]
     fn pr_link_reingest_is_idempotent() {
-        let (tmp, conn, mut embedder) = setup_test();
+        let (tmp, mut conn, mut embedder) = setup_test();
 
         let lines = vec![
             make_entry("user", "Hello"),
@@ -1319,8 +931,24 @@ mod tests {
         let transcript = write_transcript(tmp.path(), &refs);
 
         // Ingest twice
-        run_ingest(&conn, &mut embedder, "s1", &transcript, "/tmp/p", "/tmp/p").unwrap();
-        run_ingest(&conn, &mut embedder, "s1", &transcript, "/tmp/p", "/tmp/p").unwrap();
+        run_ingest(
+            &mut conn,
+            &mut embedder,
+            "s1",
+            &transcript,
+            "/tmp/p",
+            "/tmp/p",
+        )
+        .unwrap();
+        run_ingest(
+            &mut conn,
+            &mut embedder,
+            "s1",
+            &transcript,
+            "/tmp/p",
+            "/tmp/p",
+        )
+        .unwrap();
 
         let count: i64 = conn
             .query_row(

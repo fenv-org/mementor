@@ -11,11 +11,13 @@ use crate::transcript::parser::{MessageRole, ParsedMessage};
 #[derive(Debug, PartialEq)]
 pub struct Turn {
     /// JSONL line index of the first message in this turn (User[n]).
-    pub line_index: usize,
+    pub start_line: usize,
+    /// JSONL line index of the last owned message (Assistant[n]).
+    pub end_line: usize,
     /// Whether this turn is provisional (missing User[n+1]).
     pub provisional: bool,
     /// Combined text content of the turn.
-    pub text: String,
+    pub full_text: String,
     /// Tool summaries from the assistant message (e.g., `["Read(src/main.rs)", "Edit(src/lib.rs)"]`).
     pub tool_summary: Vec<String>,
     /// Whether this turn's user message is a compaction summary.
@@ -46,7 +48,7 @@ pub fn group_into_turns(messages: &[ParsedMessage]) -> Vec<Turn> {
     let mut turns = Vec::new();
 
     for (idx, (_, user, assistant)) in pairs.iter().enumerate() {
-        let mut text = format!("[User] {}\n\n[Assistant] {}", user.text, assistant.text);
+        let mut full_text = format!("[User] {}\n\n[Assistant] {}", user.text, assistant.text);
 
         let tool_summary = match &assistant.role {
             MessageRole::Assistant { tool_summary } => tool_summary.clone(),
@@ -54,7 +56,7 @@ pub fn group_into_turns(messages: &[ParsedMessage]) -> Vec<Turn> {
         };
 
         if !tool_summary.is_empty() {
-            write!(&mut text, "\n\n[Tools] {}", tool_summary.join(" | ")).unwrap();
+            write!(&mut full_text, "\n\n[Tools] {}", tool_summary.join(" | ")).unwrap();
         }
 
         let mut provisional = true;
@@ -62,14 +64,15 @@ pub fn group_into_turns(messages: &[ParsedMessage]) -> Vec<Turn> {
         // If there's a next pair, its user message is our forward context
         if idx + 1 < pairs.len() {
             let (_, next_user, _) = &pairs[idx + 1];
-            write!(&mut text, "\n\n[User] {}", next_user.text).unwrap();
+            write!(&mut full_text, "\n\n[User] {}", next_user.text).unwrap();
             provisional = false;
         }
 
         turns.push(Turn {
-            line_index: user.line_index,
+            start_line: user.line_index,
+            end_line: assistant.line_index,
             provisional,
-            text,
+            full_text,
             tool_summary,
             is_compaction_summary: user.is_compaction_summary,
         });
@@ -81,8 +84,6 @@ pub fn group_into_turns(messages: &[ParsedMessage]) -> Vec<Turn> {
 /// A chunk ready for embedding.
 #[derive(Debug)]
 pub struct Chunk {
-    /// JSONL line index of the turn this chunk belongs to.
-    pub line_index: usize,
     /// Sequential chunk index within the turn (0-based).
     pub chunk_index: usize,
     /// The text content of this chunk.
@@ -93,7 +94,7 @@ pub struct Chunk {
 pub fn chunk_turn(turn: &Turn, tokenizer: &Tokenizer) -> Vec<Chunk> {
     let splitter =
         MarkdownSplitter::new(ChunkConfig::new(CHUNK_TARGET_TOKENS).with_sizer(tokenizer));
-    let raw_chunks: Vec<&str> = splitter.chunks(&turn.text).collect();
+    let raw_chunks: Vec<&str> = splitter.chunks(&turn.full_text).collect();
 
     if raw_chunks.is_empty() {
         return Vec::new();
@@ -101,7 +102,6 @@ pub fn chunk_turn(turn: &Turn, tokenizer: &Tokenizer) -> Vec<Chunk> {
 
     if raw_chunks.len() == 1 {
         return vec![Chunk {
-            line_index: turn.line_index,
             chunk_index: 0,
             text: raw_chunks[0].to_string(),
         }];
@@ -109,7 +109,6 @@ pub fn chunk_turn(turn: &Turn, tokenizer: &Tokenizer) -> Vec<Chunk> {
 
     // Apply overlap: prepend last N tokens from previous chunk
     let mut chunks = vec![Chunk {
-        line_index: turn.line_index,
         chunk_index: 0,
         text: raw_chunks[0].to_string(),
     }];
@@ -124,7 +123,6 @@ pub fn chunk_turn(turn: &Turn, tokenizer: &Tokenizer) -> Vec<Chunk> {
         };
 
         chunks.push(Chunk {
-            line_index: turn.line_index,
             chunk_index: i,
             text,
         });
@@ -186,9 +184,10 @@ mod tests {
         assert_eq!(
             group_into_turns(&msgs),
             vec![Turn {
-                line_index: 0,
+                start_line: 0,
+                end_line: 1,
                 provisional: true,
-                text: "[User] Hello\n\n[Assistant] Hi there".to_string(),
+                full_text: "[User] Hello\n\n[Assistant] Hi there".to_string(),
                 tool_summary: vec![],
                 is_compaction_summary: false,
             }]
@@ -207,16 +206,18 @@ mod tests {
             group_into_turns(&msgs),
             vec![
                 Turn {
-                    line_index: 0,
+                    start_line: 0,
+                    end_line: 1,
                     provisional: false,
-                    text: "[User] Q1\n\n[Assistant] A1\n\n[User] Q2".to_string(),
+                    full_text: "[User] Q1\n\n[Assistant] A1\n\n[User] Q2".to_string(),
                     tool_summary: vec![],
                     is_compaction_summary: false,
                 },
                 Turn {
-                    line_index: 2,
+                    start_line: 2,
+                    end_line: 3,
                     provisional: true,
-                    text: "[User] Q2\n\n[Assistant] A2".to_string(),
+                    full_text: "[User] Q2\n\n[Assistant] A2".to_string(),
                     tool_summary: vec![],
                     is_compaction_summary: false,
                 },
@@ -238,23 +239,26 @@ mod tests {
             group_into_turns(&msgs),
             vec![
                 Turn {
-                    line_index: 0,
+                    start_line: 0,
+                    end_line: 1,
                     provisional: false,
-                    text: "[User] Q1\n\n[Assistant] A1\n\n[User] Q2".to_string(),
+                    full_text: "[User] Q1\n\n[Assistant] A1\n\n[User] Q2".to_string(),
                     tool_summary: vec![],
                     is_compaction_summary: false,
                 },
                 Turn {
-                    line_index: 2,
+                    start_line: 2,
+                    end_line: 3,
                     provisional: false,
-                    text: "[User] Q2\n\n[Assistant] A2\n\n[User] Q3".to_string(),
+                    full_text: "[User] Q2\n\n[Assistant] A2\n\n[User] Q3".to_string(),
                     tool_summary: vec![],
                     is_compaction_summary: false,
                 },
                 Turn {
-                    line_index: 4,
+                    start_line: 4,
+                    end_line: 5,
                     provisional: true,
-                    text: "[User] Q3\n\n[Assistant] A3".to_string(),
+                    full_text: "[User] Q3\n\n[Assistant] A3".to_string(),
                     tool_summary: vec![],
                     is_compaction_summary: false,
                 },
@@ -272,9 +276,10 @@ mod tests {
     fn short_turn_single_chunk() {
         let tokenizer = test_tokenizer();
         let turn = Turn {
-            line_index: 0,
+            start_line: 0,
+            end_line: 1,
             provisional: false,
-            text: "Short text that fits in one chunk.".to_string(),
+            full_text: "Short text that fits in one chunk.".to_string(),
             tool_summary: vec![],
             is_compaction_summary: false,
         };
@@ -289,9 +294,10 @@ mod tests {
         // Generate text longer than 256 tokens
         let long_text = "This is a sentence that adds some tokens. ".repeat(100);
         let turn = Turn {
-            line_index: 0,
+            start_line: 0,
+            end_line: 1,
             provisional: false,
-            text: long_text,
+            full_text: long_text,
             tool_summary: vec![],
             is_compaction_summary: false,
         };
@@ -313,9 +319,10 @@ mod tests {
         let tokenizer = test_tokenizer();
         let long_text = "This is a sentence that adds some tokens. ".repeat(100);
         let turn = Turn {
-            line_index: 0,
+            start_line: 0,
+            end_line: 1,
             provisional: false,
-            text: long_text,
+            full_text: long_text,
             tool_summary: vec![],
             is_compaction_summary: false,
         };
@@ -383,16 +390,18 @@ mod tests {
             group_into_turns(&msgs),
             vec![
                 Turn {
-                    line_index: 5,
+                    start_line: 5,
+                    end_line: 6,
                     provisional: false,
-                    text: "[User] Q1\n\n[Assistant] A1\n\n[User] Q2".to_string(),
+                    full_text: "[User] Q1\n\n[Assistant] A1\n\n[User] Q2".to_string(),
                     tool_summary: vec![],
                     is_compaction_summary: false,
                 },
                 Turn {
-                    line_index: 10,
+                    start_line: 10,
+                    end_line: 11,
                     provisional: true,
-                    text: "[User] Q2\n\n[Assistant] A2".to_string(),
+                    full_text: "[User] Q2\n\n[Assistant] A2".to_string(),
                     tool_summary: vec![],
                     is_compaction_summary: false,
                 },
@@ -439,9 +448,10 @@ mod tests {
             group_into_turns(&msgs),
             vec![
                 Turn {
-                    line_index: 0,
+                    start_line: 0,
+                    end_line: 1,
                     provisional: false,
-                    text: "[User] Fix CI\n\n\
+                    full_text: "[User] Fix CI\n\n\
                            [Assistant] Updated the workflow.\n\n\
                            [Tools] Edit(.github/workflows/ci.yml) | Bash(cmd=\"cargo test\")\n\n\
                            [User] That works!"
@@ -453,9 +463,10 @@ mod tests {
                     is_compaction_summary: false,
                 },
                 Turn {
-                    line_index: 2,
+                    start_line: 2,
+                    end_line: 3,
                     provisional: true,
-                    text: "[User] That works!\n\n[Assistant] Great.".to_string(),
+                    full_text: "[User] That works!\n\n[Assistant] Great.".to_string(),
                     tool_summary: vec![],
                     is_compaction_summary: false,
                 },
@@ -469,9 +480,10 @@ mod tests {
         assert_eq!(
             group_into_turns(&msgs),
             vec![Turn {
-                line_index: 0,
+                start_line: 0,
+                end_line: 1,
                 provisional: true,
-                text: "[User] Hello\n\n[Assistant] Hi there".to_string(),
+                full_text: "[User] Hello\n\n[Assistant] Hi there".to_string(),
                 tool_summary: vec![],
                 is_compaction_summary: false,
             }]

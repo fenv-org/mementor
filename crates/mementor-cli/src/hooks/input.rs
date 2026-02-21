@@ -1,4 +1,4 @@
-use serde::{Deserialize, Deserializer};
+use serde::Deserialize;
 
 /// Input received from the Claude Code Stop hook via stdin.
 #[derive(Debug, Deserialize)]
@@ -9,24 +9,6 @@ pub struct StopHookInput {
     pub transcript_path: String,
     /// The project working directory.
     pub cwd: String,
-}
-
-/// Input received from the Claude Code `UserPromptSubmit` hook via stdin.
-#[derive(Debug, Deserialize)]
-pub struct PromptHookInput {
-    /// The session ID of the Claude Code conversation.
-    pub session_id: String,
-    /// The user's prompt text. May be null when users send only @-file
-    /// references without a text prompt.
-    #[serde(default, deserialize_with = "nullable_string")]
-    pub prompt: String,
-    /// The project working directory.
-    pub cwd: String,
-}
-
-/// Deserialize a string that may be JSON `null` into an empty string.
-fn nullable_string<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
-    Option::<String>::deserialize(d).map(Option::unwrap_or_default)
 }
 
 /// Read and parse the stop hook input from stdin.
@@ -53,59 +35,11 @@ pub struct PreCompactInput {
     pub custom_instructions: String,
 }
 
-/// Read and parse the prompt hook input from stdin.
-pub fn read_prompt_input(reader: &mut dyn std::io::Read) -> anyhow::Result<PromptHookInput> {
-    let mut buf = String::new();
-    reader.read_to_string(&mut buf)?;
-    let input: PromptHookInput = serde_json::from_str(&buf)?;
-    Ok(input)
-}
-
 /// Read and parse the pre-compact hook input from stdin.
 pub fn read_pre_compact_input(reader: &mut dyn std::io::Read) -> anyhow::Result<PreCompactInput> {
     let mut buf = String::new();
     reader.read_to_string(&mut buf)?;
     let input: PreCompactInput = serde_json::from_str(&buf)?;
-    Ok(input)
-}
-
-/// Input received from the Claude Code `PreToolUse` hook via stdin.
-#[derive(Debug, PartialEq, Deserialize)]
-pub struct PreToolUseInput {
-    /// The session ID of the Claude Code conversation.
-    pub session_id: String,
-    /// The name of the tool being invoked (e.g., "Read", "Edit", "Write").
-    pub tool_name: String,
-    /// The tool's input parameters (contains `file_path`, `notebook_path`, etc.).
-    pub tool_input: serde_json::Value,
-    /// The project working directory.
-    pub cwd: String,
-}
-
-/// Read and parse the `PreToolUse` hook input from stdin.
-pub fn read_pre_tool_use_input(reader: &mut dyn std::io::Read) -> anyhow::Result<PreToolUseInput> {
-    let mut buf = String::new();
-    reader.read_to_string(&mut buf)?;
-    let input: PreToolUseInput = serde_json::from_str(&buf)?;
-    Ok(input)
-}
-
-/// Input received from the Claude Code `SubagentStart` hook via stdin.
-#[derive(Debug, PartialEq, Deserialize)]
-pub struct SubagentStartInput {
-    /// The session ID of the Claude Code conversation.
-    pub session_id: String,
-    /// The project working directory.
-    pub cwd: String,
-}
-
-/// Read and parse the `SubagentStart` hook input from stdin.
-pub fn read_subagent_start_input(
-    reader: &mut dyn std::io::Read,
-) -> anyhow::Result<SubagentStartInput> {
-    let mut buf = String::new();
-    reader.read_to_string(&mut buf)?;
-    let input: SubagentStartInput = serde_json::from_str(&buf)?;
     Ok(input)
 }
 
@@ -120,14 +54,6 @@ mod tests {
         assert_eq!(input.session_id, "abc-123");
         assert_eq!(input.transcript_path, "/tmp/transcript.jsonl");
         assert_eq!(input.cwd, "/home/user/project");
-    }
-
-    #[test]
-    fn parse_prompt_input() {
-        let json = r#"{"session_id": "abc-123", "prompt": "How do I fix the bug?", "cwd": "/home/user/project"}"#;
-        let input = read_prompt_input(&mut json.as_bytes()).unwrap();
-        assert_eq!(input.session_id, "abc-123");
-        assert_eq!(input.prompt, "How do I fix the bug?");
     }
 
     #[test]
@@ -155,68 +81,9 @@ mod tests {
     }
 
     #[test]
-    fn parse_prompt_input_null_prompt() {
-        let json = r#"{"session_id": "abc-123", "prompt": null, "cwd": "/home/user/project"}"#;
-        let input = read_prompt_input(&mut json.as_bytes()).unwrap();
-        assert_eq!(input.session_id, "abc-123");
-        assert!(input.prompt.is_empty());
-    }
-
-    #[test]
-    fn parse_prompt_input_missing_prompt() {
-        let json = r#"{"session_id": "abc-123", "cwd": "/home/user/project"}"#;
-        let input = read_prompt_input(&mut json.as_bytes()).unwrap();
-        assert_eq!(input.session_id, "abc-123");
-        assert!(input.prompt.is_empty());
-    }
-
-    #[test]
     fn missing_field_errors() {
         let json = r#"{"session_id": "abc"}"#;
         let result = read_stop_input(&mut json.as_bytes());
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn parse_pre_tool_use_input() {
-        let json = r#"{"session_id": "abc-123", "tool_name": "Read", "tool_input": {"file_path": "/tmp/main.rs"}, "cwd": "/home/user/project"}"#;
-        let input = read_pre_tool_use_input(&mut json.as_bytes()).unwrap();
-        assert_eq!(
-            input,
-            PreToolUseInput {
-                session_id: "abc-123".to_string(),
-                tool_name: "Read".to_string(),
-                tool_input: serde_json::json!({"file_path": "/tmp/main.rs"}),
-                cwd: "/home/user/project".to_string(),
-            }
-        );
-    }
-
-    #[test]
-    fn parse_pre_tool_use_input_no_file_path() {
-        let json = r#"{"session_id": "abc-123", "tool_name": "Bash", "tool_input": {"command": "ls"}, "cwd": "/tmp"}"#;
-        let input = read_pre_tool_use_input(&mut json.as_bytes()).unwrap();
-        assert_eq!(
-            input,
-            PreToolUseInput {
-                session_id: "abc-123".to_string(),
-                tool_name: "Bash".to_string(),
-                tool_input: serde_json::json!({"command": "ls"}),
-                cwd: "/tmp".to_string(),
-            }
-        );
-    }
-
-    #[test]
-    fn parse_subagent_start_input() {
-        let json = r#"{"session_id": "abc-123", "cwd": "/home/user/project"}"#;
-        let input = read_subagent_start_input(&mut json.as_bytes()).unwrap();
-        assert_eq!(
-            input,
-            SubagentStartInput {
-                session_id: "abc-123".to_string(),
-                cwd: "/home/user/project".to_string(),
-            }
-        );
     }
 }

@@ -38,13 +38,13 @@ where
         return Ok(());
     }
 
-    let conn = runtime.db.open()?;
+    let mut conn = runtime.db.open()?;
     let mut embedder = Embedder::new(runtime.context.model_cache_dir())?;
 
     // Ingest latest conversation before compaction erases active context
     let project_root = runtime.context.project_root().to_string_lossy();
     run_ingest(
-        &conn,
+        &mut conn,
         &mut embedder,
         &input.session_id,
         Path::new(&input.transcript_path),

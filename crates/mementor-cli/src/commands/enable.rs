@@ -91,7 +91,7 @@ fn configure_hooks(ctx: &MementorContext) -> anyhow::Result<()> {
         (serde_json::json!({}), true)
     };
 
-    // Build hook config
+    // Build hook config — only Stop and PreCompact
     let stop_hook = serde_json::json!({
         "hooks": [{
             "type": "command",
@@ -99,32 +99,10 @@ fn configure_hooks(ctx: &MementorContext) -> anyhow::Result<()> {
         }]
     });
 
-    let prompt_hook = serde_json::json!({
-        "hooks": [{
-            "type": "command",
-            "command": "mementor hook user-prompt-submit"
-        }]
-    });
-
     let pre_compact_hook = serde_json::json!({
         "hooks": [{
             "type": "command",
             "command": "mementor hook pre-compact"
-        }]
-    });
-
-    let pre_tool_use_hook = serde_json::json!({
-        "matcher": "Read|Edit|Write|NotebookEdit",
-        "hooks": [{
-            "type": "command",
-            "command": "mementor hook pre-tool-use"
-        }]
-    });
-
-    let subagent_start_hook = serde_json::json!({
-        "hooks": [{
-            "type": "command",
-            "command": "mementor hook subagent-start"
         }]
     });
 
@@ -141,10 +119,7 @@ fn configure_hooks(ctx: &MementorContext) -> anyhow::Result<()> {
 
     // Upsert mementor hooks (replace existing mementor entries, preserve others)
     upsert_hook_entry(hooks_obj, "Stop", stop_hook);
-    upsert_hook_entry(hooks_obj, "UserPromptSubmit", prompt_hook);
     upsert_hook_entry(hooks_obj, "PreCompact", pre_compact_hook);
-    upsert_hook_entry(hooks_obj, "PreToolUse", pre_tool_use_hook);
-    upsert_hook_entry(hooks_obj, "SubagentStart", subagent_start_hook);
 
     // Write settings back, preserving original EOF newline behavior
     let mut formatted = serde_json::to_string_pretty(&settings)?;
@@ -245,7 +220,7 @@ mod tests {
         let raw = std::fs::read_to_string(runtime.context.claude_settings_path()).unwrap();
         let settings: serde_json::Value = serde_json::from_str(&raw).unwrap();
         assert!(settings["hooks"]["Stop"].is_array());
-        assert!(settings["hooks"]["UserPromptSubmit"].is_array());
+        assert!(settings["hooks"]["PreCompact"].is_array());
     }
 
     #[test]
@@ -321,43 +296,12 @@ mod tests {
                |        ]
                |      }
                |    ],
-               |    "UserPromptSubmit": [
-               |      {
-               |        "hooks": [
-               |          {
-               |            "type": "command",
-               |            "command": "mementor hook user-prompt-submit"
-               |          }
-               |        ]
-               |      }
-               |    ],
                |    "PreCompact": [
                |      {
                |        "hooks": [
                |          {
                |            "type": "command",
                |            "command": "mementor hook pre-compact"
-               |          }
-               |        ]
-               |      }
-               |    ],
-               |    "PreToolUse": [
-               |      {
-               |        "matcher": "Read\|Edit\|Write\|NotebookEdit",
-               |        "hooks": [
-               |          {
-               |            "type": "command",
-               |            "command": "mementor hook pre-tool-use"
-               |          }
-               |        ]
-               |      }
-               |    ],
-               |    "SubagentStart": [
-               |      {
-               |        "hooks": [
-               |          {
-               |            "type": "command",
-               |            "command": "mementor hook subagent-start"
                |          }
                |        ]
                |      }
@@ -406,43 +350,12 @@ mod tests {
                |        ]
                |      }
                |    ],
-               |    "UserPromptSubmit": [
-               |      {
-               |        "hooks": [
-               |          {
-               |            "type": "command",
-               |            "command": "mementor hook user-prompt-submit"
-               |          }
-               |        ]
-               |      }
-               |    ],
                |    "PreCompact": [
                |      {
                |        "hooks": [
                |          {
                |            "type": "command",
                |            "command": "mementor hook pre-compact"
-               |          }
-               |        ]
-               |      }
-               |    ],
-               |    "PreToolUse": [
-               |      {
-               |        "matcher": "Read\|Edit\|Write\|NotebookEdit",
-               |        "hooks": [
-               |          {
-               |            "type": "command",
-               |            "command": "mementor hook pre-tool-use"
-               |          }
-               |        ]
-               |      }
-               |    ],
-               |    "SubagentStart": [
-               |      {
-               |        "hooks": [
-               |          {
-               |            "type": "command",
-               |            "command": "mementor hook subagent-start"
                |          }
                |        ]
                |      }
@@ -591,43 +504,12 @@ mod tests {
                |        ]
                |      }
                |    ],
-               |    "UserPromptSubmit": [
-               |      {
-               |        "hooks": [
-               |          {
-               |            "type": "command",
-               |            "command": "mementor hook user-prompt-submit"
-               |          }
-               |        ]
-               |      }
-               |    ],
                |    "PreCompact": [
                |      {
                |        "hooks": [
                |          {
                |            "type": "command",
                |            "command": "mementor hook pre-compact"
-               |          }
-               |        ]
-               |      }
-               |    ],
-               |    "PreToolUse": [
-               |      {
-               |        "matcher": "Read\|Edit\|Write\|NotebookEdit",
-               |        "hooks": [
-               |          {
-               |            "type": "command",
-               |            "command": "mementor hook pre-tool-use"
-               |          }
-               |        ]
-               |      }
-               |    ],
-               |    "SubagentStart": [
-               |      {
-               |        "hooks": [
-               |          {
-               |            "type": "command",
-               |            "command": "mementor hook subagent-start"
                |          }
                |        ]
                |      }
@@ -687,15 +569,6 @@ mod tests {
                |            "command": "my-linter check"
                |          }
                |        ]
-               |      },
-               |      {
-               |        "matcher": "Read\|Edit\|Write\|NotebookEdit",
-               |        "hooks": [
-               |          {
-               |            "type": "command",
-               |            "command": "mementor hook pre-tool-use"
-               |          }
-               |        ]
                |      }
                |    ],
                |    "Stop": [
@@ -708,32 +581,12 @@ mod tests {
                |        ]
                |      }
                |    ],
-               |    "UserPromptSubmit": [
-               |      {
-               |        "hooks": [
-               |          {
-               |            "type": "command",
-               |            "command": "mementor hook user-prompt-submit"
-               |          }
-               |        ]
-               |      }
-               |    ],
                |    "PreCompact": [
                |      {
                |        "hooks": [
                |          {
                |            "type": "command",
                |            "command": "mementor hook pre-compact"
-               |          }
-               |        ]
-               |      }
-               |    ],
-               |    "SubagentStart": [
-               |      {
-               |        "hooks": [
-               |          {
-               |            "type": "command",
-               |            "command": "mementor hook subagent-start"
                |          }
                |        ]
                |      }
@@ -799,43 +652,12 @@ mod tests {
                |        ]
                |      }
                |    ],
-               |    "UserPromptSubmit": [
-               |      {
-               |        "hooks": [
-               |          {
-               |            "type": "command",
-               |            "command": "mementor hook user-prompt-submit"
-               |          }
-               |        ]
-               |      }
-               |    ],
                |    "PreCompact": [
                |      {
                |        "hooks": [
                |          {
                |            "type": "command",
                |            "command": "mementor hook pre-compact"
-               |          }
-               |        ]
-               |      }
-               |    ],
-               |    "PreToolUse": [
-               |      {
-               |        "matcher": "Read\|Edit\|Write\|NotebookEdit",
-               |        "hooks": [
-               |          {
-               |            "type": "command",
-               |            "command": "mementor hook pre-tool-use"
-               |          }
-               |        ]
-               |      }
-               |    ],
-               |    "SubagentStart": [
-               |      {
-               |        "hooks": [
-               |          {
-               |            "type": "command",
-               |            "command": "mementor hook subagent-start"
                |          }
                |        ]
                |      }
@@ -970,6 +792,7 @@ mod tests {
         std::fs::create_dir_all(&claude_dir).unwrap();
 
         // Real-world settings.json: "command" before "type" (Claude Code's ordering)
+        // Only Stop and PreCompact hooks now
         let input = crate::test_util::_trim_margin(
             r#"|{
                |  "attribution": {
@@ -992,37 +815,6 @@ mod tests {
                |        "hooks": [
                |          {
                |            "command": "mementor hook stop",
-               |            "type": "command"
-               |          }
-               |        ]
-               |      }
-               |    ],
-               |    "UserPromptSubmit": [
-               |      {
-               |        "hooks": [
-               |          {
-               |            "command": "mementor hook user-prompt-submit",
-               |            "type": "command"
-               |          }
-               |        ]
-               |      }
-               |    ],
-               |    "PreToolUse": [
-               |      {
-               |        "matcher": "Read\|Edit\|Write\|NotebookEdit",
-               |        "hooks": [
-               |          {
-               |            "command": "mementor hook pre-tool-use",
-               |            "type": "command"
-               |          }
-               |        ]
-               |      }
-               |    ],
-               |    "SubagentStart": [
-               |      {
-               |        "hooks": [
-               |          {
-               |            "command": "mementor hook subagent-start",
                |            "type": "command"
                |          }
                |        ]

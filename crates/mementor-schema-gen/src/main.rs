@@ -13,7 +13,10 @@ macro_rules! migration_ddl {
 }
 
 /// All migration files in order. Add new entries here when creating migrations.
-const MIGRATIONS: &[&str] = &[migration_ddl!("00001__initial_schema.sql")];
+const MIGRATIONS: &[&str] = &[
+    migration_ddl!("00001__initial_schema.sql"),
+    migration_ddl!("00002__schema_redesign.sql"),
+];
 
 fn main() {
     let conn = Connection::open_in_memory().expect("Failed to open in-memory database");
@@ -35,13 +38,22 @@ fn main() {
     println!("Schema written to {}", output_path.display());
 }
 
-/// Dump all CREATE statements from `sqlite_master`, excluding `SQLite` internals.
+/// Dump all CREATE statements from `sqlite_master`, excluding `SQLite` internals
+/// and FTS5 shadow tables (which are auto-created by the virtual table).
 fn dump_schema(conn: &Connection) -> String {
     let mut stmt = conn
         .prepare(
             "SELECT sql FROM sqlite_master \
              WHERE sql IS NOT NULL \
              AND name NOT LIKE 'sqlite_%' \
+             AND NOT ( \
+                 sqlite_master.type = 'table' \
+                 AND EXISTS ( \
+                     SELECT 1 FROM sqlite_master vt \
+                     WHERE vt.sql LIKE 'CREATE VIRTUAL TABLE%' \
+                     AND sqlite_master.name LIKE vt.name || '_%' \
+                 ) \
+             ) \
              ORDER BY \
                  CASE type \
                      WHEN 'table' THEN 0 \
