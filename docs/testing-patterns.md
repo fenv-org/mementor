@@ -240,6 +240,117 @@ crate::try_run(
 ).unwrap();
 ```
 
+## Migration Test Patterns
+
+Schema migration tests live in `crates/mementor-lib/tests/schema_snapshot.rs`.
+The snapshot validation test lives in `crates/mementor-schema-gen/`.
+
+### Never copy-paste DDL
+
+Always use `include_str!` from `.sql` files via the `migration_ddl!` macro.
+Never inline DDL strings in test code — this is the exact duplication problem
+these patterns exist to prevent.
+
+```rust
+macro_rules! migration_ddl {
+    ($file:literal) => {
+        include_str!(concat!("../ddl/migrations/", $file))
+    };
+}
+```
+
+### Cascading seed functions
+
+Each `seed_vN()` function calls `seed_v(N-1)()`, applies the Nth migration,
+and inserts test data into all new or modified tables. This ensures each
+migration test starts with a fully populated database from all prior versions.
+
+```rust
+/// Apply V1 migration and insert test data into all V1 tables.
+fn seed_v1(conn: &Connection) {
+    conn.execute_batch(migration_ddl!("00001__initial_schema.sql")).unwrap();
+
+    conn.execute(
+        "INSERT INTO sessions (session_id, transcript_path, project_dir)
+         VALUES ('s1', '/tmp/t.jsonl', '/tmp/p')",
+        [],
+    ).unwrap();
+    conn.execute(
+        "INSERT INTO memories (session_id, line_index, chunk_index, role, content)
+         VALUES ('s1', 0, 0, 'user', 'hello')",
+        [],
+    ).unwrap();
+    // ... insert into all V1 tables
+}
+
+/// Apply V2 migration on top of a seeded V1 DB, then insert V2-specific data.
+fn seed_v2(conn: &Connection) {
+    seed_v1(conn);
+    conn.execute_batch(migration_ddl!("00002__description.sql")).unwrap();
+    // Insert records into new/modified V2 tables
+}
+```
+
+### Step-by-step migration tests
+
+Each `vN_to_vN+1` test calls `seed_vN()`, applies the next migration, and
+verifies all prior data is preserved:
+
+```rust
+#[test]
+fn v1_to_v2_preserves_data() {
+    let conn = Connection::open_in_memory().unwrap();
+    seed_v1(&conn);
+    conn.execute_batch(migration_ddl!("00002__description.sql")).unwrap();
+
+    // Verify all V1 data is preserved
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sessions", [], |r| r.get(0),
+    ).unwrap();
+    assert_eq!(count, 1);
+    // ... verify all tables
+}
+```
+
+### Fresh install test
+
+The `zero_to_latest_is_fully_functional` test applies `schema.sql` directly
+(no step-by-step migrations) and verifies the database is fully functional.
+This tests the fresh install path:
+
+```rust
+#[test]
+fn zero_to_latest_is_fully_functional() {
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch(include_str!("../ddl/schema.sql")).unwrap();
+
+    // INSERT and verify records in all tables
+    // Verify DEFAULT values, UNIQUE constraints, FK constraints, NULL columns
+}
+```
+
+### Functional verification checklist
+
+Migration tests should verify:
+- INSERT into each table with all columns
+- DEFAULT values (`created_at`, `updated_at`, `last_line_index`)
+- UNIQUE constraints (`memories`, `file_mentions`, `pr_links`)
+- FK constraints (`memories` → `sessions`, etc.)
+- NULL columns (`provisional_turn_start`, `last_compact_line_index`, `embedding`)
+
+### Regenerating the snapshot
+
+When a new migration is added, regenerate `schema.sql`:
+
+```bash
+mise run schema:dump
+```
+
+The `migrations_match_snapshot` test in `mementor-schema-gen` will fail in CI
+if `schema.sql` is out of date.
+
+---
+
 ## Running Tests
 
 Use the mise task to ensure ANSI color codes are disabled (required for Rule 5):
