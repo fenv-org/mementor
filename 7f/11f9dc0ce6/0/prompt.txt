@@ -56,3 +56,7 @@ Follow these rules strictly:
    )"
    ```
 3. Run `git status` after the commit to verify the result.
+
+---
+
+watch #37 and clean up the branch when #37 is merged

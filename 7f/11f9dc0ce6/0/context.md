@@ -25,3 +25,7 @@ Perform a commit following the project's conventions. Execute the steps below in
 
 Run the ...
 
+### Prompt 3
+
+watch #37 and clean up the branch when #37 is merged
+
