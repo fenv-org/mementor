@@ -8,11 +8,11 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 
 use anyhow::Context;
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use tracing::debug;
 
 /// Session data stored in the `sessions` table.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct Session {
     pub session_id: String,
     pub transcript_path: String,
@@ -32,12 +32,13 @@ pub fn upsert_session(conn: &Connection, session: &Session) -> anyhow::Result<()
         "Upserting session"
     );
     conn.execute(
-        "INSERT INTO sessions (session_id, transcript_path, project_dir, last_line_index, provisional_turn_start, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'))
+        "INSERT INTO sessions (session_id, transcript_path, project_dir, last_line_index, provisional_turn_start, last_compact_line_index, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'))
          ON CONFLICT(session_id) DO UPDATE SET
            transcript_path = excluded.transcript_path,
            last_line_index = excluded.last_line_index,
            provisional_turn_start = excluded.provisional_turn_start,
+           last_compact_line_index = COALESCE(excluded.last_compact_line_index, sessions.last_compact_line_index),
            updated_at = datetime('now')",
         params![
             session.session_id,
@@ -45,6 +46,7 @@ pub fn upsert_session(conn: &Connection, session: &Session) -> anyhow::Result<()
             session.project_dir,
             session.last_line_index as i64,
             session.provisional_turn_start.map(|v| v as i64),
+            session.last_compact_line_index.map(|v| v as i64),
         ],
     )
     .context("Failed to upsert session")?;
@@ -463,21 +465,6 @@ pub fn update_compact_line(conn: &Connection, session_id: &str) -> anyhow::Resul
     Ok(())
 }
 
-/// Trait extension for `rusqlite::OptionalExtension`.
-trait OptionalExt<T> {
-    fn optional(self) -> rusqlite::Result<Option<T>>;
-}
-
-impl<T> OptionalExt<T> for rusqlite::Result<T> {
-    fn optional(self) -> rusqlite::Result<Option<T>> {
-        match self {
-            Ok(v) => Ok(Some(v)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(e),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::super::connection::open_db;
@@ -505,10 +492,7 @@ mod tests {
         upsert_session(&conn, &session).unwrap();
 
         let result = get_session(&conn, "test-session").unwrap().unwrap();
-        assert_eq!(result.session_id, "test-session");
-        assert_eq!(result.last_line_index, 0);
-        assert!(result.provisional_turn_start.is_none());
-        assert!(result.last_compact_line_index.is_none());
+        assert_eq!(result, session);
     }
 
     #[test]
@@ -533,8 +517,86 @@ mod tests {
         upsert_session(&conn, &updated).unwrap();
 
         let result = get_session(&conn, "s1").unwrap().unwrap();
-        assert_eq!(result.last_line_index, 10);
-        assert_eq!(result.provisional_turn_start, Some(8));
+        assert_eq!(result, updated);
+    }
+
+    #[test]
+    fn upsert_session_sets_last_compact_line_index() {
+        let (_tmp, conn) = test_db();
+
+        let session = Session {
+            session_id: "s1".to_string(),
+            transcript_path: "/tmp/t.jsonl".to_string(),
+            project_dir: "/tmp/p".to_string(),
+            last_line_index: 100,
+            provisional_turn_start: None,
+            last_compact_line_index: Some(50),
+        };
+        upsert_session(&conn, &session).unwrap();
+
+        let result = get_session(&conn, "s1").unwrap().unwrap();
+        assert_eq!(result, session);
+    }
+
+    #[test]
+    fn upsert_session_preserves_last_compact_line_index_on_null() {
+        let (_tmp, conn) = test_db();
+
+        // Insert with last_compact_line_index = Some(50)
+        let session = Session {
+            session_id: "s1".to_string(),
+            transcript_path: "/tmp/t.jsonl".to_string(),
+            project_dir: "/tmp/p".to_string(),
+            last_line_index: 100,
+            provisional_turn_start: None,
+            last_compact_line_index: Some(50),
+        };
+        upsert_session(&conn, &session).unwrap();
+
+        // Update with last_compact_line_index = None — should preserve the existing value
+        let updated = Session {
+            last_line_index: 200,
+            last_compact_line_index: None,
+            ..session
+        };
+        upsert_session(&conn, &updated).unwrap();
+
+        let result = get_session(&conn, "s1").unwrap().unwrap();
+        assert_eq!(
+            result,
+            Session {
+                last_line_index: 200,
+                last_compact_line_index: Some(50),
+                ..updated
+            }
+        );
+    }
+
+    #[test]
+    fn upsert_session_updates_last_compact_line_index() {
+        let (_tmp, conn) = test_db();
+
+        // Insert with last_compact_line_index = Some(50)
+        let session = Session {
+            session_id: "s1".to_string(),
+            transcript_path: "/tmp/t.jsonl".to_string(),
+            project_dir: "/tmp/p".to_string(),
+            last_line_index: 100,
+            provisional_turn_start: None,
+            last_compact_line_index: Some(50),
+        };
+        upsert_session(&conn, &session).unwrap();
+
+        // Update with a new last_compact_line_index — should overwrite
+        let updated = Session {
+            last_line_index: 200,
+            last_compact_line_index: Some(150),
+            ..session
+        };
+        upsert_session(&conn, &updated).unwrap();
+
+        let result = get_session(&conn, "s1").unwrap().unwrap();
+        assert_eq!(result, updated);
     }
 
     #[test]

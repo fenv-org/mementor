@@ -21,7 +21,9 @@ cross-session context persistence without any external API dependencies.
   (768 dimensions). Model files are loaded from disk at runtime
   (`~/.mementor/models/gte-multilingual-base/`).
 - **Text splitting**: `text-splitter` crate with `MarkdownSplitter`
-- **Schema migration**: `rusqlite_migration`
+- **Schema migration**: Snapshot-first with `include_str!` + SQLite
+  `user_version` pragma. DDL files live in `crates/mementor-lib/ddl/`.
+  Run `mise run schema:dump` to regenerate the snapshot from migrations.
 - **Error handling**: `anyhow`
 - **Logging**: `tracing`
 - **CLI**: `clap`
@@ -50,10 +52,14 @@ mementor/
     mementor-lib/         Core library
       src/lib.rs          Library root
       build.rs            Compiles sqlite-vector C sources via cc
+      ddl/
+        schema.sql        Complete DDL snapshot for current schema
+        migrations/       Incremental migration SQL files
     mementor-cli/         CLI layer with DI
       src/lib.rs          CLI command dispatch
     mementor-main/        Thin binary entry point
       src/main.rs         main() -- wires DI, calls CLI
+    mementor-schema-gen/  Schema snapshot generator (generates schema.sql)
     mementor-test-util/   Shared test utilities (dev-dependency only)
 
   vendor/
@@ -79,6 +85,11 @@ mementor/
 - **mementor-main**: The `[[bin]]` crate (binary name: `mementor`). Constructs
   real implementations of all traits and passes them to mementor-cli. Should
   contain minimal logic -- just wiring.
+
+- **mementor-schema-gen**: Schema snapshot generator. Applies all migration
+  files to an in-memory DB and writes the resulting DDL to
+  `crates/mementor-lib/ddl/schema.sql`. Also validates that the snapshot is up
+  to date via the `migrations_match_snapshot` test.
 
 - **mementor-test-util**: Shared test helpers used by multiple crates. Git
   repository helpers (`init_git_repo`, `run_git`), path assertion utilities

@@ -1800,7 +1800,6 @@ dependencies = [
  "fastembed",
  "mementor-test-util",
  "rusqlite",
- "rusqlite_migration",
  "serde",
  "serde_json",
  "tempfile",
@@ -1808,6 +1807,13 @@ dependencies = [
  "tokenizers",
  "tracing",
  "unicode-segmentation",
+]
+
+[[package]]
+name = "mementor-schema-gen"
+version = "0.1.0"
+dependencies = [
+ "rusqlite",
 ]
 
 [[package]]
@@ -2565,16 +2571,6 @@ dependencies = [
  "libsqlite3-sys",
  "smallvec",
  "sqlite-wasm-rs",
-]
-
-[[package]]
-name = "rusqlite_migration"
-version = "2.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "67ffe0efe8568c769d1e39c67ea2a093134afaac9bb4559246a2ee7a4d686044"
-dependencies = [
- "log",
- "rusqlite",
 ]
 
 [[package]]

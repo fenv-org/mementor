@@ -554,17 +554,7 @@ pub fn search_context(
         "Phase 8: reconstruct turns"
     );
 
-    let mut ctx = String::from("## Relevant past context\n\n");
     for (i, ((sid, line_idx), distance)) in sorted.iter().enumerate() {
-        let key = (sid.clone(), *line_idx);
-        let full_text = turn_texts
-            .get(&key)
-            .map_or_else(String::new, |chunks| chunks.join("\n\n"));
-
-        if full_text.is_empty() {
-            continue;
-        }
-
         debug!(
             rank = i + 1,
             distance = distance,
@@ -572,22 +562,51 @@ pub fn search_context(
             line_index = line_idx,
             "Search result"
         );
+    }
 
+    let entries: Vec<_> = sorted.iter().map(|((s, l), _)| (s.clone(), *l)).collect();
+    let dists: Vec<_> = sorted.iter().map(|((_, _), d)| *d).collect();
+    Ok(format_memories(
+        "## Relevant past context\n\n",
+        &entries,
+        Some(&dists),
+        &turn_texts,
+    ))
+}
+
+/// Format search results into markdown memory entries.
+///
+/// Returns an empty string if no entries have non-empty content.
+fn format_memories(
+    header: &str,
+    entries: &[(String, usize)],
+    distances: Option<&[f64]>,
+    turn_texts: &HashMap<(String, usize), Vec<String>>,
+) -> String {
+    let mut ctx = String::from(header);
+    let initial_len = ctx.len();
+    for (i, (sid, line_idx)) in entries.iter().enumerate() {
+        let Some(chunks) = turn_texts.get(&(sid.clone(), *line_idx)) else {
+            continue;
+        };
+        let full_text = chunks.join("\n\n");
+        if full_text.is_empty() {
+            continue;
+        }
+        let dist_suffix =
+            distances.map_or_else(String::new, |d| format!(" (distance: {:.4})", d[i]));
         write!(
             &mut ctx,
-            "### Memory {} (distance: {:.4})\n{}\n\n",
-            i + 1,
-            distance,
-            full_text,
+            "### Memory {}{dist_suffix}\n{full_text}\n\n",
+            i + 1
         )
         .unwrap();
     }
-
-    if ctx.len() == "## Relevant past context\n\n".len() {
-        return Ok(String::new());
+    if ctx.len() > initial_len {
+        ctx
+    } else {
+        String::new()
     }
-
-    Ok(ctx)
 }
 
 /// Search file mentions for past context about a specific file path.
@@ -621,26 +640,7 @@ pub fn search_file_context(
     let turn_texts = get_turns_chunks(conn, &turn_keys)?;
 
     let header = format!("## Past context for {normalized}\n\n");
-    let header_len = header.len();
-    let mut ctx = header;
-    for (i, (sid, line_idx)) in results.iter().enumerate() {
-        let key = (sid.clone(), *line_idx);
-        let full_text = turn_texts
-            .get(&key)
-            .map_or_else(String::new, |chunks| chunks.join("\n\n"));
-
-        if full_text.is_empty() {
-            continue;
-        }
-
-        write!(&mut ctx, "### Memory {}\n{}\n\n", i + 1, full_text).unwrap();
-    }
-
-    if ctx.len() == header_len {
-        return Ok(String::new());
-    }
-
-    Ok(ctx)
+    Ok(format_memories(&header, &results, None, &turn_texts))
 }
 
 #[cfg(test)]
@@ -815,18 +815,10 @@ mod tests {
                 project_dir: "/test/p".to_string(),
                 last_line_index: last_line,
                 provisional_turn_start: None,
-                last_compact_line_index: None,
+                last_compact_line_index: compact_line,
             },
         )
         .unwrap();
-        // upsert_session doesn't set last_compact_line_index, so update directly
-        if let Some(boundary) = compact_line {
-            conn.execute(
-                "UPDATE sessions SET last_compact_line_index = ?1 WHERE session_id = ?2",
-                rusqlite::params![boundary as i64, session_id],
-            )
-            .unwrap();
-        }
     }
 
     #[test]

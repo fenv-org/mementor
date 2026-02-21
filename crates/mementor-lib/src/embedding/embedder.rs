@@ -67,7 +67,7 @@ impl Embedder {
 
     /// Embed a batch of text strings and return their vector representations.
     pub fn embed_batch(&mut self, texts: &[&str]) -> anyhow::Result<Vec<Vec<f32>>> {
-        let owned: Vec<String> = texts.iter().map(|s| (*s).to_string()).collect();
+        let owned: Vec<String> = texts.iter().copied().map(String::from).collect();
         let embeddings = self
             .model
             .embed(owned, None)

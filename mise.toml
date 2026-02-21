@@ -14,6 +14,10 @@ description = "Run unit tests only with ANSI colors disabled"
 run = "cargo run -p mementor -- model download"
 description = "Download embedding model from Hugging Face if not present"
 
+[tasks."schema:dump"]
+run = "cargo run -p mementor-schema-gen"
+description = "Regenerate schema.sql from migration files"
+
 [tasks."deno:test"]
 run = "deno test -A"
 description = "Run Deno script tests"
