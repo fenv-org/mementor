@@ -12,7 +12,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use tracing::debug;
 
 /// Session data stored in the `sessions` table.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct Session {
     pub session_id: String,
     pub transcript_path: String,
@@ -492,10 +492,7 @@ mod tests {
         upsert_session(&conn, &session).unwrap();
 
         let result = get_session(&conn, "test-session").unwrap().unwrap();
-        assert_eq!(result.session_id, "test-session");
-        assert_eq!(result.last_line_index, 0);
-        assert!(result.provisional_turn_start.is_none());
-        assert!(result.last_compact_line_index.is_none());
+        assert_eq!(result, session);
     }
 
     #[test]
@@ -520,8 +517,7 @@ mod tests {
         upsert_session(&conn, &updated).unwrap();
 
         let result = get_session(&conn, "s1").unwrap().unwrap();
-        assert_eq!(result.last_line_index, 10);
-        assert_eq!(result.provisional_turn_start, Some(8));
+        assert_eq!(result, updated);
     }
 
     #[test]
@@ -539,7 +535,7 @@ mod tests {
         upsert_session(&conn, &session).unwrap();
 
         let result = get_session(&conn, "s1").unwrap().unwrap();
-        assert_eq!(result.last_compact_line_index, Some(50));
+        assert_eq!(result, session);
     }
 
     #[test]
@@ -566,8 +562,14 @@ mod tests {
         upsert_session(&conn, &updated).unwrap();
 
         let result = get_session(&conn, "s1").unwrap().unwrap();
-        assert_eq!(result.last_line_index, 200);
-        assert_eq!(result.last_compact_line_index, Some(50));
+        assert_eq!(
+            result,
+            Session {
+                last_line_index: 200,
+                last_compact_line_index: Some(50),
+                ..updated
+            }
+        );
     }
 
     #[test]
@@ -594,8 +596,7 @@ mod tests {
         upsert_session(&conn, &updated).unwrap();
 
         let result = get_session(&conn, "s1").unwrap().unwrap();
-        assert_eq!(result.last_line_index, 200);
-        assert_eq!(result.last_compact_line_index, Some(150));
+        assert_eq!(result, updated);
     }
 
     #[test]

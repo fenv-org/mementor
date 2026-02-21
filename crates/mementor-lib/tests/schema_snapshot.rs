@@ -245,7 +245,7 @@ fn zero_to_latest_is_fully_functional() {
         .unwrap();
     assert_eq!(table_count, 4);
 
-    // Verify 3 indexes exist
+    // Verify 2 indexes exist
     let index_count: i64 = conn
         .query_row(
             "SELECT count(*) FROM sqlite_master \

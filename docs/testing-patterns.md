@@ -286,7 +286,7 @@ fn seed_v1(conn: &Connection) {
 /// Apply V2 migration on top of a seeded V1 DB, then insert V2-specific data.
 fn seed_v2(conn: &Connection) {
     seed_v1(conn);
-    conn.execute_batch(migration_ddl!("00002__description.sql")).unwrap();
+    conn.execute_batch(migration_ddl!("00002__add_foo_table.sql")).unwrap();
     // Insert records into new/modified V2 tables
 }
 ```
@@ -301,7 +301,7 @@ verifies all prior data is preserved:
 fn v1_to_v2_preserves_data() {
     let conn = Connection::open_in_memory().unwrap();
     seed_v1(&conn);
-    conn.execute_batch(migration_ddl!("00002__description.sql")).unwrap();
+    conn.execute_batch(migration_ddl!("00002__add_foo_table.sql")).unwrap();
 
     // Verify all V1 data is preserved
     let count: i64 = conn.query_row(

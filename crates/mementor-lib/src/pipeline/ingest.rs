@@ -554,8 +554,9 @@ pub fn search_context(
         "Phase 8: reconstruct turns"
     );
 
-    for ((sid, line_idx), distance) in &sorted {
+    for (i, ((sid, line_idx), distance)) in sorted.iter().enumerate() {
         debug!(
+            rank = i + 1,
             distance = distance,
             result_session_id = %sid,
             line_index = line_idx,

@@ -57,6 +57,16 @@ duplication problem can be solved with a simpler approach.
   ON CONFLICT clauses (previously silently dropped; workaround raw SQL removed)
 - Simplified `embed_batch` closure to method reference
 
+### Code review fixes (post-simplification)
+
+- Derived `PartialEq` on `Session` and switched all upsert tests to full
+  struct comparison
+- Re-added `rusqlite` dependency via `cargo add` in `mementor-schema-gen`
+- Fixed comment "Verify 3 indexes" → "Verify 2 indexes" in schema_snapshot.rs
+- Restored `rank` field in `search_context` debug logging
+- Renamed placeholder `00002__description.sql` → `00002__add_foo_table.sql`
+  in testing-patterns.md
+
 ## TODO
 
 - [x] Create worktree and history document
