@@ -8,31 +8,31 @@
     "code-review@claude-plugins-official": true
   },
   "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "entire hooks claude-code post-task"
+          }
+        ]
+      },
+      {
+        "matcher": "TodoWrite",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "entire hooks claude-code post-todo"
+          }
+        ]
+      }
+    ],
     "PreCompact": [
       {
         "hooks": [
           {
             "command": "mementor hook pre-compact",
-            "type": "command"
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "command": "mementor hook stop",
-            "type": "command"
-          }
-        ]
-      }
-    ],
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "command": "mementor hook user-prompt-submit",
             "type": "command"
           }
         ]
@@ -47,6 +47,52 @@
             "command": "mementor hook pre-tool-use"
           }
         ]
+      },
+      {
+        "matcher": "Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "entire hooks claude-code pre-task"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "entire hooks claude-code session-end"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "entire hooks claude-code session-start"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "mementor hook stop"
+          },
+          {
+            "type": "command",
+            "command": "entire hooks claude-code stop"
+          }
+        ]
       }
     ],
     "SubagentStart": [
@@ -55,6 +101,21 @@
           {
             "type": "command",
             "command": "mementor hook subagent-start"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "mementor hook user-prompt-submit"
+          },
+          {
+            "type": "command",
+            "command": "entire hooks claude-code user-prompt-submit"
           }
         ]
       }
@@ -103,6 +164,9 @@
       "Bash(source *)",
       "Bash(test *)",
       "Bash(wc *)"
+    ],
+    "deny": [
+      "Read(./.entire/metadata/**)"
     ]
   }
 }
