@@ -301,10 +301,6 @@ pub fn run_ingest(
 
     if turns.is_empty() {
         debug!("No turns formed from messages");
-        // Clean up any existing provisional turn before clearing the pointer
-        if let Some(prov_line) = provisional_start {
-            delete_turn_at(conn, session_id, prov_line)?;
-        }
         // Still update session to advance past raw entries / PR links
         let last_line = raw_entries
             .iter()

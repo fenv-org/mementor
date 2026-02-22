@@ -88,7 +88,7 @@ Redesign the database schema to:
 - [x] Replace `unwrap_or(read_from)` with `unwrap()` for guaranteed non-empty messages
 
 ### Post-implementation: Code Review Findings
-- [x] Fix provisional turn leak in `turns.is_empty()` early return (bug, score 85)
+- Reverted: provisional turn leak in `turns.is_empty()` (score 85) — unreachable in practice (transcripts are append-only)
 - [x] Remove dead code `delete_entries_from` and its test (score 75)
 - [x] Fix partial test assertions in 3 tests to use full struct comparison (score 75)
 - [x] Fix inconsistent backtick formatting in `RawEntry.entry_type` doc (score 50)
