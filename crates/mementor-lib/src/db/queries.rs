@@ -4,9 +4,6 @@
     clippy::cast_sign_loss
 )]
 
-use std::collections::HashMap;
-use std::fmt::Write as _;
-
 use anyhow::Context;
 use rusqlite::{Connection, OptionalExtension, params};
 use tracing::debug;
@@ -17,6 +14,7 @@ pub struct Session {
     pub session_id: String,
     pub transcript_path: String,
     pub project_dir: String,
+    pub started_at: Option<String>,
     pub last_line_index: usize,
     pub provisional_turn_start: Option<usize>,
     pub last_compact_line_index: Option<usize>,
@@ -32,10 +30,12 @@ pub fn upsert_session(conn: &Connection, session: &Session) -> anyhow::Result<()
         "Upserting session"
     );
     conn.execute(
-        "INSERT INTO sessions (session_id, transcript_path, project_dir, last_line_index, provisional_turn_start, last_compact_line_index, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'))
+        "INSERT INTO sessions (session_id, transcript_path, project_dir, started_at, \
+         last_line_index, provisional_turn_start, last_compact_line_index, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, datetime('now'))
          ON CONFLICT(session_id) DO UPDATE SET
            transcript_path = excluded.transcript_path,
+           started_at = COALESCE(excluded.started_at, sessions.started_at),
            last_line_index = excluded.last_line_index,
            provisional_turn_start = excluded.provisional_turn_start,
            last_compact_line_index = COALESCE(excluded.last_compact_line_index, sessions.last_compact_line_index),
@@ -44,6 +44,7 @@ pub fn upsert_session(conn: &Connection, session: &Session) -> anyhow::Result<()
             session.session_id,
             session.transcript_path,
             session.project_dir,
+            session.started_at,
             session.last_line_index as i64,
             session.provisional_turn_start.map(|v| v as i64),
             session.last_compact_line_index.map(|v| v as i64),
@@ -57,8 +58,8 @@ pub fn upsert_session(conn: &Connection, session: &Session) -> anyhow::Result<()
 pub fn get_session(conn: &Connection, session_id: &str) -> anyhow::Result<Option<Session>> {
     let mut stmt = conn
         .prepare(
-            "SELECT session_id, transcript_path, project_dir, last_line_index,
-                    provisional_turn_start, last_compact_line_index
+            "SELECT session_id, transcript_path, project_dir, started_at,
+                    last_line_index, provisional_turn_start, last_compact_line_index
              FROM sessions WHERE session_id = ?1",
         )
         .context("Failed to prepare get_session query")?;
@@ -69,9 +70,10 @@ pub fn get_session(conn: &Connection, session_id: &str) -> anyhow::Result<Option
                 session_id: row.get(0)?,
                 transcript_path: row.get(1)?,
                 project_dir: row.get(2)?,
-                last_line_index: row.get::<_, i64>(3)? as usize,
-                provisional_turn_start: row.get::<_, Option<i64>>(4)?.map(|v| v as usize),
-                last_compact_line_index: row.get::<_, Option<i64>>(5)?.map(|v| v as usize),
+                started_at: row.get(3)?,
+                last_line_index: row.get::<_, i64>(4)? as usize,
+                provisional_turn_start: row.get::<_, Option<i64>>(5)?.map(|v| v as usize),
+                last_compact_line_index: row.get::<_, Option<i64>>(6)?.map(|v| v as usize),
             })
         })
         .optional()
@@ -80,317 +82,127 @@ pub fn get_session(conn: &Connection, session_id: &str) -> anyhow::Result<Option
     Ok(result)
 }
 
-/// Insert a memory chunk with its embedding vector.
-pub fn insert_memory(
-    conn: &Connection,
-    session_id: &str,
-    line_index: usize,
-    chunk_index: usize,
-    role: &str,
-    content: &str,
-    embedding: &[f32],
-) -> anyhow::Result<()> {
-    debug!(
-        session_id = %session_id,
-        line_index = line_index,
-        chunk_index = chunk_index,
-        content_len = content.len(),
-        content = %content,
-        "Inserting memory chunk"
-    );
-    let embedding_json = serde_json::to_string(embedding)?;
-
+/// Update the compaction boundary for a session.
+///
+/// Sets `last_compact_line_index` to the current `last_line_index`,
+/// marking all turns up to that point as pre-compaction.
+pub fn update_compact_line(conn: &Connection, session_id: &str) -> anyhow::Result<()> {
     conn.execute(
-        "INSERT OR REPLACE INTO memories (session_id, line_index, chunk_index, role, content, embedding)
-         VALUES (?1, ?2, ?3, ?4, ?5, vector_as_f32(?6))",
-        params![
-            session_id,
-            line_index as i64,
-            chunk_index as i64,
-            role,
-            content,
-            embedding_json,
-        ],
+        "UPDATE sessions SET last_compact_line_index = last_line_index, updated_at = datetime('now')
+         WHERE session_id = ?1",
+        params![session_id],
     )
-    .context("Failed to insert memory")?;
+    .context("Failed to update compact line")?;
+    debug!(session_id = %session_id, "Updated compaction boundary");
     Ok(())
 }
 
-/// Delete all memories for a session at a specific line index.
-/// Used when re-processing a provisional turn.
-pub fn delete_memories_at(
+/// Insert an entry into the `entries` table. Uses `INSERT OR IGNORE` for idempotency.
+pub fn insert_entry(
     conn: &Connection,
     session_id: &str,
     line_index: usize,
+    entry_type: &str,
+    content: &str,
+    tool_summary: &str,
+    timestamp: Option<&str>,
+) -> anyhow::Result<()> {
+    conn.execute(
+        "INSERT OR IGNORE INTO entries \
+         (session_id, line_index, entry_type, content, tool_summary, timestamp)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            session_id,
+            line_index as i64,
+            entry_type,
+            content,
+            tool_summary,
+            timestamp,
+        ],
+    )
+    .context("Failed to insert entry")?;
+    Ok(())
+}
+
+/// Insert or update a turn. Returns the turn's rowid.
+pub fn upsert_turn(
+    conn: &Connection,
+    session_id: &str,
+    start_line: usize,
+    end_line: usize,
+    provisional: bool,
+    full_text: &str,
+) -> anyhow::Result<i64> {
+    let turn_id: i64 = conn
+        .query_row(
+            "INSERT INTO turns (session_id, start_line, end_line, provisional, full_text)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(session_id, start_line) DO UPDATE SET
+               end_line = excluded.end_line,
+               provisional = excluded.provisional,
+               full_text = excluded.full_text
+             RETURNING id",
+            params![
+                session_id,
+                start_line as i64,
+                end_line as i64,
+                i64::from(provisional),
+                full_text,
+            ],
+            |row| row.get(0),
+        )
+        .context("Failed to upsert turn")?;
+
+    Ok(turn_id)
+}
+
+/// Delete a turn at a given `start_line`. CASCADE handles chunks and `file_mentions`.
+pub fn delete_turn_at(
+    conn: &Connection,
+    session_id: &str,
+    start_line: usize,
 ) -> anyhow::Result<usize> {
     let deleted = conn
         .execute(
-            "DELETE FROM memories WHERE session_id = ?1 AND line_index = ?2",
-            params![session_id, line_index as i64],
+            "DELETE FROM turns WHERE session_id = ?1 AND start_line = ?2",
+            params![session_id, start_line as i64],
         )
-        .context("Failed to delete memories")?;
+        .context("Failed to delete turn")?;
     Ok(deleted)
 }
 
-/// A search result from vector similarity search.
-#[derive(Debug)]
-pub struct MemorySearchResult {
-    pub session_id: String,
-    pub line_index: usize,
-    pub chunk_index: usize,
-    pub role: String,
-    pub content: String,
-    pub distance: f64,
-}
-
-/// Search for the top-k most similar memories using cosine distance.
-///
-/// Uses the `vector_full_scan` virtual table provided by sqlite-vector.
-/// When `exclude_session_id` is provided, results from that session are
-/// filtered out unless they fall at or before the `compact_boundary`.
-pub fn search_memories(
+/// Insert a chunk with its embedding vector.
+pub fn insert_chunk(
     conn: &Connection,
-    query_embedding: &[f32],
-    k: usize,
-    exclude_session_id: Option<&str>,
-    compact_boundary: Option<usize>,
-) -> anyhow::Result<Vec<MemorySearchResult>> {
-    let query_json = serde_json::to_string(query_embedding)?;
+    turn_id: i64,
+    chunk_index: usize,
+    embedding: &[f32],
+) -> anyhow::Result<()> {
+    let embedding_json = serde_json::to_string(embedding)?;
 
-    let mut stmt = conn.prepare(
-        "SELECT m.session_id, m.line_index, m.chunk_index, m.role, m.content, vs.distance
-         FROM vector_full_scan('memories', 'embedding', ?1, ?2) vs
-         JOIN memories m ON m.rowid = vs.id
-         WHERE ?3 IS NULL
-            OR m.session_id != ?3
-            OR (?4 IS NOT NULL AND m.line_index <= ?4)
-         ORDER BY vs.distance ASC",
-    )?;
-
-    let results = stmt
-        .query_map(
-            params![
-                query_json,
-                k as i64,
-                exclude_session_id,
-                compact_boundary.map(|v| v as i64),
-            ],
-            |row| {
-                Ok(MemorySearchResult {
-                    session_id: row.get(0)?,
-                    line_index: row.get::<_, i64>(1)? as usize,
-                    chunk_index: row.get::<_, i64>(2)? as usize,
-                    role: row.get(3)?,
-                    content: row.get(4)?,
-                    distance: row.get(5)?,
-                })
-            },
-        )?
-        .collect::<Result<Vec<_>, _>>()
-        .context("Failed to search memories")?;
-
-    debug!(
-        k = k,
-        exclude_session_id = ?exclude_session_id,
-        compact_boundary = ?compact_boundary,
-        result_count = results.len(),
-        "Vector search completed"
-    );
-
-    Ok(results)
+    conn.execute(
+        "INSERT OR REPLACE INTO chunks (turn_id, chunk_index, embedding)
+         VALUES (?1, ?2, vector_as_f32(?3))",
+        params![turn_id, chunk_index as i64, embedding_json],
+    )
+    .context("Failed to insert chunk")?;
+    Ok(())
 }
 
-/// Batch-retrieve all chunks for multiple turns in a single query.
-///
-/// Returns a map from `(session_id, line_index)` to the ordered list of chunk
-/// contents for that turn. Chunks are ordered by `chunk_index` ascending.
-pub fn get_turns_chunks(
-    conn: &Connection,
-    turn_keys: &[(&str, usize)],
-) -> anyhow::Result<HashMap<(String, usize), Vec<String>>> {
-    if turn_keys.is_empty() {
-        return Ok(HashMap::new());
-    }
-
-    // Build dynamic WHERE clause with OR conditions
-    let mut sql = String::from(
-        "SELECT session_id, line_index, content
-         FROM memories WHERE ",
-    );
-    let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-    for (i, (sid, line_idx)) in turn_keys.iter().enumerate() {
-        if i > 0 {
-            sql.push_str(" OR ");
-        }
-        let p1 = i * 2 + 1;
-        let p2 = i * 2 + 2;
-        write!(&mut sql, "(session_id = ?{p1} AND line_index = ?{p2})").unwrap();
-        param_values.push(Box::new((*sid).to_string()));
-        param_values.push(Box::new(*line_idx as i64));
-    }
-    sql.push_str(" ORDER BY session_id, line_index, chunk_index");
-
-    let param_refs: Vec<&dyn rusqlite::types::ToSql> = param_values.iter().map(|p| &**p).collect();
-    let mut stmt = conn
-        .prepare(&sql)
-        .context("Failed to prepare get_turns_chunks query")?;
-    let rows = stmt
-        .query_map(param_refs.as_slice(), |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, i64>(1)? as usize,
-                row.get::<_, String>(2)?,
-            ))
-        })?
-        .collect::<Result<Vec<_>, _>>()
-        .context("Failed to query turn chunks")?;
-
-    let mut result: HashMap<(String, usize), Vec<String>> = HashMap::new();
-    for (sid, line_idx, raw) in rows {
-        result.entry((sid, line_idx)).or_default().push(raw);
-    }
-
-    debug!(
-        turn_count = turn_keys.len(),
-        total_chunks = result.values().map(Vec::len).sum::<usize>(),
-        "Batch-retrieved turn chunks"
-    );
-
-    Ok(result)
-}
-
-/// Insert a file mention record. Uses INSERT OR IGNORE to skip duplicates.
+/// Insert a file mention record linked to a turn. Uses `INSERT OR IGNORE` for idempotency.
 pub fn insert_file_mention(
     conn: &Connection,
-    session_id: &str,
-    line_index: usize,
+    turn_id: i64,
     file_path: &str,
     tool_name: &str,
 ) -> anyhow::Result<()> {
     conn.execute(
-        "INSERT OR IGNORE INTO file_mentions (session_id, line_index, file_path, tool_name)
-         VALUES (?1, ?2, ?3, ?4)",
-        params![session_id, line_index as i64, file_path, tool_name],
+        "INSERT OR IGNORE INTO file_mentions (turn_id, file_path, tool_name)
+         VALUES (?1, ?2, ?3)",
+        params![turn_id, file_path, tool_name],
     )
     .context("Failed to insert file mention")?;
     Ok(())
-}
-
-/// Delete all file mentions for a session at a specific line index.
-/// Used when re-processing a provisional turn (cascade delete).
-pub fn delete_file_mentions_at(
-    conn: &Connection,
-    session_id: &str,
-    line_index: usize,
-) -> anyhow::Result<usize> {
-    let deleted = conn
-        .execute(
-            "DELETE FROM file_mentions WHERE session_id = ?1 AND line_index = ?2",
-            params![session_id, line_index as i64],
-        )
-        .context("Failed to delete file mentions")?;
-    Ok(deleted)
-}
-
-/// Search for turns that mention any of the given file paths.
-///
-/// Returns `(session_id, line_index)` pairs ranked by match count (descending).
-/// Uses exact path matching against normalized file paths stored in the table.
-///
-/// When `exclude_session_id` is provided, results from that session are
-/// filtered out unless they fall at or before the `compact_boundary`.
-pub fn search_by_file_path(
-    conn: &Connection,
-    file_paths: &[&str],
-    exclude_session_id: Option<&str>,
-    compact_boundary: Option<usize>,
-    k: usize,
-) -> anyhow::Result<Vec<(String, usize)>> {
-    if file_paths.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    // Build dynamic SQL with path conditions
-    let mut sql = String::from(
-        "SELECT session_id, line_index, COUNT(DISTINCT file_path) as match_count
-         FROM file_mentions WHERE (",
-    );
-    let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-
-    for (i, path) in file_paths.iter().enumerate() {
-        if i > 0 {
-            sql.push_str(" OR ");
-        }
-        let p = param_values.len() + 1;
-        write!(&mut sql, "file_path = ?{p}").unwrap();
-        param_values.push(Box::new((*path).to_string()));
-    }
-    sql.push(')');
-
-    // In-context filter: exclude current session unless before compact boundary
-    let exclude_param = param_values.len() + 1;
-    let boundary_param = param_values.len() + 2;
-    write!(
-        &mut sql,
-        " AND (?{exclude_param} IS NULL OR session_id != ?{exclude_param} OR (?{boundary_param} IS NOT NULL AND line_index <= ?{boundary_param}))"
-    )
-    .unwrap();
-    param_values.push(Box::new(exclude_session_id.map(String::from)));
-    param_values.push(Box::new(compact_boundary.map(|v| v as i64)));
-
-    let k_param = param_values.len() + 1;
-    write!(
-        &mut sql,
-        " GROUP BY session_id, line_index ORDER BY match_count DESC LIMIT ?{k_param}"
-    )
-    .unwrap();
-    param_values.push(Box::new(k as i64));
-
-    let param_refs: Vec<&dyn rusqlite::types::ToSql> = param_values.iter().map(|p| &**p).collect();
-    let mut stmt = conn
-        .prepare(&sql)
-        .context("Failed to prepare search_by_file_path query")?;
-    let results = stmt
-        .query_map(param_refs.as_slice(), |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as usize))
-        })?
-        .collect::<Result<Vec<_>, _>>()
-        .context("Failed to search by file path")?;
-
-    debug!(
-        file_count = file_paths.len(),
-        result_count = results.len(),
-        "File path search completed"
-    );
-
-    Ok(results)
-}
-
-/// Get recently mentioned file paths for a session, most-recently-touched first.
-pub fn get_recent_file_mentions(
-    conn: &Connection,
-    session_id: &str,
-    limit: usize,
-) -> anyhow::Result<Vec<String>> {
-    let mut stmt = conn
-        .prepare(
-            "SELECT file_path, MAX(line_index) as last_seen
-             FROM file_mentions
-             WHERE session_id = ?1
-             GROUP BY file_path
-             ORDER BY last_seen DESC
-             LIMIT ?2",
-        )
-        .context("Failed to prepare get_recent_file_mentions query")?;
-
-    let results = stmt
-        .query_map(params![session_id, limit as i64], |row| {
-            row.get::<_, String>(0)
-        })?
-        .collect::<Result<Vec<_>, _>>()
-        .context("Failed to query recent file mentions")?;
-
-    Ok(results)
 }
 
 /// A PR link associated with a session.
@@ -403,7 +215,7 @@ pub struct PrLink {
     pub timestamp: String,
 }
 
-/// Insert a PR link for a session. Uses INSERT OR IGNORE for idempotency.
+/// Insert a PR link for a session. Uses `INSERT OR IGNORE` for idempotency.
 pub fn insert_pr_link(
     conn: &Connection,
     session_id: &str,
@@ -450,21 +262,6 @@ pub fn get_pr_links_for_session(
     Ok(results)
 }
 
-/// Update the compaction boundary for a session.
-///
-/// Sets `last_compact_line_index` to the current `last_line_index`,
-/// marking all memories up to that point as pre-compaction.
-pub fn update_compact_line(conn: &Connection, session_id: &str) -> anyhow::Result<()> {
-    conn.execute(
-        "UPDATE sessions SET last_compact_line_index = last_line_index, updated_at = datetime('now')
-         WHERE session_id = ?1",
-        params![session_id],
-    )
-    .context("Failed to update compact line")?;
-    debug!(session_id = %session_id, "Updated compaction boundary");
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::super::connection::open_db;
@@ -477,18 +274,29 @@ mod tests {
         (tmp, conn)
     }
 
+    fn make_session(session_id: &str) -> Session {
+        Session {
+            session_id: session_id.to_string(),
+            transcript_path: "/tmp/transcript.jsonl".to_string(),
+            project_dir: "/tmp/project".to_string(),
+            started_at: None,
+            last_line_index: 0,
+            provisional_turn_start: None,
+            last_compact_line_index: None,
+        }
+    }
+
+    fn seed_session(conn: &Connection, session_id: &str) {
+        upsert_session(conn, &make_session(session_id)).unwrap();
+    }
+
+    // --- Session tests ---
+
     #[test]
     fn upsert_and_get_session() {
         let (_tmp, conn) = test_db();
 
-        let session = Session {
-            session_id: "test-session".to_string(),
-            transcript_path: "/tmp/transcript.jsonl".to_string(),
-            project_dir: "/tmp/project".to_string(),
-            last_line_index: 0,
-            provisional_turn_start: None,
-            last_compact_line_index: None,
-        };
+        let session = make_session("test-session");
         upsert_session(&conn, &session).unwrap();
 
         let result = get_session(&conn, "test-session").unwrap().unwrap();
@@ -496,23 +304,58 @@ mod tests {
     }
 
     #[test]
-    fn upsert_session_updates_existing() {
+    fn upsert_session_with_started_at() {
         let (_tmp, conn) = test_db();
 
         let session = Session {
-            session_id: "s1".to_string(),
-            transcript_path: "/tmp/t.jsonl".to_string(),
-            project_dir: "/tmp/p".to_string(),
-            last_line_index: 0,
-            provisional_turn_start: None,
-            last_compact_line_index: None,
+            started_at: Some("2026-02-21T10:00:00Z".to_string()),
+            ..make_session("s1")
         };
         upsert_session(&conn, &session).unwrap();
+
+        let result = get_session(&conn, "s1").unwrap().unwrap();
+        assert_eq!(result, session);
+    }
+
+    #[test]
+    fn upsert_session_preserves_started_at_on_null() {
+        let (_tmp, conn) = test_db();
+
+        let session = Session {
+            started_at: Some("2026-02-21T10:00:00Z".to_string()),
+            ..make_session("s1")
+        };
+        upsert_session(&conn, &session).unwrap();
+
+        // Update with started_at = None — should preserve existing
+        let updated = Session {
+            last_line_index: 10,
+            started_at: None,
+            ..make_session("s1")
+        };
+        upsert_session(&conn, &updated).unwrap();
+
+        let result = get_session(&conn, "s1").unwrap().unwrap();
+        assert_eq!(
+            result,
+            Session {
+                started_at: Some("2026-02-21T10:00:00Z".to_string()),
+                last_line_index: 10,
+                ..make_session("s1")
+            }
+        );
+    }
+
+    #[test]
+    fn upsert_session_updates_existing() {
+        let (_tmp, conn) = test_db();
+
+        upsert_session(&conn, &make_session("s1")).unwrap();
 
         let updated = Session {
             last_line_index: 10,
             provisional_turn_start: Some(8),
-            ..session
+            ..make_session("s1")
         };
         upsert_session(&conn, &updated).unwrap();
 
@@ -521,43 +364,20 @@ mod tests {
     }
 
     #[test]
-    fn upsert_session_sets_last_compact_line_index() {
-        let (_tmp, conn) = test_db();
-
-        let session = Session {
-            session_id: "s1".to_string(),
-            transcript_path: "/tmp/t.jsonl".to_string(),
-            project_dir: "/tmp/p".to_string(),
-            last_line_index: 100,
-            provisional_turn_start: None,
-            last_compact_line_index: Some(50),
-        };
-        upsert_session(&conn, &session).unwrap();
-
-        let result = get_session(&conn, "s1").unwrap().unwrap();
-        assert_eq!(result, session);
-    }
-
-    #[test]
     fn upsert_session_preserves_last_compact_line_index_on_null() {
         let (_tmp, conn) = test_db();
 
-        // Insert with last_compact_line_index = Some(50)
         let session = Session {
-            session_id: "s1".to_string(),
-            transcript_path: "/tmp/t.jsonl".to_string(),
-            project_dir: "/tmp/p".to_string(),
             last_line_index: 100,
-            provisional_turn_start: None,
             last_compact_line_index: Some(50),
+            ..make_session("s1")
         };
         upsert_session(&conn, &session).unwrap();
 
-        // Update with last_compact_line_index = None — should preserve the existing value
         let updated = Session {
             last_line_index: 200,
             last_compact_line_index: None,
-            ..session
+            ..make_session("s1")
         };
         upsert_session(&conn, &updated).unwrap();
 
@@ -567,7 +387,7 @@ mod tests {
             Session {
                 last_line_index: 200,
                 last_compact_line_index: Some(50),
-                ..updated
+                ..make_session("s1")
             }
         );
     }
@@ -576,22 +396,17 @@ mod tests {
     fn upsert_session_updates_last_compact_line_index() {
         let (_tmp, conn) = test_db();
 
-        // Insert with last_compact_line_index = Some(50)
         let session = Session {
-            session_id: "s1".to_string(),
-            transcript_path: "/tmp/t.jsonl".to_string(),
-            project_dir: "/tmp/p".to_string(),
             last_line_index: 100,
-            provisional_turn_start: None,
             last_compact_line_index: Some(50),
+            ..make_session("s1")
         };
         upsert_session(&conn, &session).unwrap();
 
-        // Update with a new last_compact_line_index — should overwrite
         let updated = Session {
             last_line_index: 200,
             last_compact_line_index: Some(150),
-            ..session
+            ..make_session("s1")
         };
         upsert_session(&conn, &updated).unwrap();
 
@@ -607,211 +422,160 @@ mod tests {
     }
 
     #[test]
-    fn insert_and_search_memories() {
+    fn update_compact_line_sets_boundary() {
         let (_tmp, conn) = test_db();
 
         let session = Session {
-            session_id: "s1".to_string(),
-            transcript_path: "/tmp/t.jsonl".to_string(),
-            project_dir: "/tmp/p".to_string(),
-            last_line_index: 2,
-            provisional_turn_start: None,
-            last_compact_line_index: None,
+            last_line_index: 42,
+            ..make_session("s1")
         };
         upsert_session(&conn, &session).unwrap();
 
-        // Insert two memories with different embeddings
-        let emb1 = vec![1.0_f32; 768];
-        let emb2 = vec![0.5_f32; 768];
-        insert_memory(&conn, "s1", 0, 0, "user", "Hello world", &emb1).unwrap();
-        insert_memory(&conn, "s1", 0, 1, "assistant", "Hi there", &emb2).unwrap();
+        update_compact_line(&conn, "s1").unwrap();
 
-        // Search should return results ordered by distance
-        let query = vec![1.0_f32; 768]; // Same as emb1
-        let results = search_memories(&conn, &query, 5, None, None).unwrap();
-        assert_eq!(results.len(), 2);
-        assert_eq!(results[0].content, "Hello world"); // Closest match
+        let result = get_session(&conn, "s1").unwrap().unwrap();
+        assert_eq!(result.last_compact_line_index, Some(42));
+    }
+
+    // --- Entry tests ---
+
+    #[test]
+    fn insert_entry_basic() {
+        let (_tmp, conn) = test_db();
+        seed_session(&conn, "s1");
+
+        insert_entry(
+            &conn,
+            "s1",
+            0,
+            "user",
+            "Hello",
+            "",
+            Some("2026-02-21T10:00:00Z"),
+        )
+        .unwrap();
+        insert_entry(
+            &conn,
+            "s1",
+            1,
+            "assistant",
+            "Hi there",
+            "Read(src/main.rs)",
+            None,
+        )
+        .unwrap();
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM entries WHERE session_id = 's1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 2);
     }
 
     #[test]
-    fn delete_memories_at_line_index() {
+    fn insert_entry_idempotent() {
         let (_tmp, conn) = test_db();
+        seed_session(&conn, "s1");
 
-        let session = Session {
-            session_id: "s1".to_string(),
-            transcript_path: "/tmp/t.jsonl".to_string(),
-            project_dir: "/tmp/p".to_string(),
-            last_line_index: 4,
-            provisional_turn_start: None,
-            last_compact_line_index: None,
-        };
-        upsert_session(&conn, &session).unwrap();
+        insert_entry(&conn, "s1", 0, "user", "Hello", "", None).unwrap();
+        insert_entry(&conn, "s1", 0, "user", "Hello again", "", None).unwrap();
 
+        let count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM entries WHERE session_id = 's1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    // --- Turn tests ---
+
+    #[test]
+    fn upsert_turn_and_cascade_delete() {
+        let (_tmp, conn) = test_db();
+        seed_session(&conn, "s1");
+
+        let turn_id = upsert_turn(&conn, "s1", 0, 1, false, "turn text").unwrap();
+        assert!(turn_id > 0);
+
+        // Insert chunk and file mention linked to the turn
         let emb = vec![1.0_f32; 768];
-        insert_memory(&conn, "s1", 0, 0, "user", "chunk 0-0", &emb).unwrap();
-        insert_memory(&conn, "s1", 0, 1, "user", "chunk 0-1", &emb).unwrap();
-        insert_memory(&conn, "s1", 2, 0, "user", "chunk 2-0", &emb).unwrap();
+        insert_chunk(&conn, turn_id, 0, &emb).unwrap();
+        insert_file_mention(&conn, turn_id, "src/main.rs", "Read").unwrap();
 
-        let deleted = delete_memories_at(&conn, "s1", 0).unwrap();
-        assert_eq!(deleted, 2);
+        // Delete the turn — CASCADE should clean up chunks and file_mentions
+        let deleted = delete_turn_at(&conn, "s1", 0).unwrap();
+        assert_eq!(deleted, 1);
 
-        // Only chunk at line_index=2 should remain
-        let results = search_memories(&conn, &emb, 10, None, None).unwrap();
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].line_index, 2);
+        let chunk_count: i64 = conn
+            .query_row("SELECT count(*) FROM chunks", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(chunk_count, 0);
+
+        let mention_count: i64 = conn
+            .query_row("SELECT count(*) FROM file_mentions", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(mention_count, 0);
     }
 
     #[test]
-    fn get_turns_chunks_returns_grouped_results() {
-        let (_tmp, conn) = test_db();
-
-        let session = Session {
-            session_id: "s1".to_string(),
-            transcript_path: "/tmp/t.jsonl".to_string(),
-            project_dir: "/tmp/p".to_string(),
-            last_line_index: 10,
-            provisional_turn_start: None,
-            last_compact_line_index: None,
-        };
-        upsert_session(&conn, &session).unwrap();
-
-        let emb = vec![1.0_f32; 768];
-        // Turn at line 0: 2 chunks
-        insert_memory(&conn, "s1", 0, 0, "turn", "chunk-0-0", &emb).unwrap();
-        insert_memory(&conn, "s1", 0, 1, "turn", "chunk-0-1", &emb).unwrap();
-        // Turn at line 4: 3 chunks
-        insert_memory(&conn, "s1", 4, 0, "turn", "chunk-4-0", &emb).unwrap();
-        insert_memory(&conn, "s1", 4, 1, "turn", "chunk-4-1", &emb).unwrap();
-        insert_memory(&conn, "s1", 4, 2, "turn", "chunk-4-2", &emb).unwrap();
-        // Turn at line 8: 1 chunk (not queried)
-        insert_memory(&conn, "s1", 8, 0, "turn", "chunk-8-0", &emb).unwrap();
-
-        let keys = vec![("s1", 0), ("s1", 4)];
-        let result = get_turns_chunks(&conn, &keys).unwrap();
-
-        assert_eq!(result.len(), 2);
-        assert_eq!(
-            result[&("s1".to_string(), 0)],
-            vec!["chunk-0-0", "chunk-0-1"]
-        );
-        assert_eq!(
-            result[&("s1".to_string(), 4)],
-            vec!["chunk-4-0", "chunk-4-1", "chunk-4-2"]
-        );
-        // line 8 should NOT be in results
-        assert!(!result.contains_key(&("s1".to_string(), 8)));
-    }
-
-    #[test]
-    fn get_turns_chunks_empty_keys() {
-        let (_tmp, conn) = test_db();
-        let result = get_turns_chunks(&conn, &[]).unwrap();
-        assert!(result.is_empty());
-    }
-
-    fn seed_session(conn: &Connection, session_id: &str) {
-        let session = Session {
-            session_id: session_id.to_string(),
-            transcript_path: "/tmp/t.jsonl".to_string(),
-            project_dir: "/tmp/p".to_string(),
-            last_line_index: 0,
-            provisional_turn_start: None,
-            last_compact_line_index: None,
-        };
-        upsert_session(conn, &session).unwrap();
-    }
-
-    #[test]
-    fn insert_and_search_file_mentions() {
-        let (_tmp, conn) = test_db();
-        seed_session(&conn, "s1");
-        seed_session(&conn, "s2");
-
-        insert_file_mention(&conn, "s1", 0, "src/main.rs", "Read").unwrap();
-        insert_file_mention(&conn, "s1", 0, "src/lib.rs", "Edit").unwrap();
-        insert_file_mention(&conn, "s2", 4, "src/main.rs", "Write").unwrap();
-
-        let results = search_by_file_path(&conn, &["src/main.rs"], None, None, 10).unwrap();
-        assert_eq!(results, vec![("s1".to_string(), 0), ("s2".to_string(), 4),]);
-    }
-
-    #[test]
-    fn file_search_excludes_in_context() {
-        let (_tmp, conn) = test_db();
-        seed_session(&conn, "s1");
-        seed_session(&conn, "s2");
-
-        insert_file_mention(&conn, "s1", 0, "src/main.rs", "Read").unwrap();
-        insert_file_mention(&conn, "s2", 4, "src/main.rs", "Write").unwrap();
-
-        // Exclude s1: only s2 should appear
-        let results = search_by_file_path(&conn, &["src/main.rs"], Some("s1"), None, 10).unwrap();
-        assert_eq!(results, vec![("s2".to_string(), 4)]);
-    }
-
-    #[test]
-    fn file_search_in_context_with_compact_boundary() {
+    fn upsert_turn_updates_existing() {
         let (_tmp, conn) = test_db();
         seed_session(&conn, "s1");
 
-        insert_file_mention(&conn, "s1", 2, "src/main.rs", "Read").unwrap();
-        insert_file_mention(&conn, "s1", 8, "src/main.rs", "Edit").unwrap();
+        let id1 = upsert_turn(&conn, "s1", 0, 1, true, "provisional").unwrap();
+        let id2 = upsert_turn(&conn, "s1", 0, 3, false, "completed").unwrap();
 
-        // Exclude s1 but allow entries at or before compact boundary 5
-        let results =
-            search_by_file_path(&conn, &["src/main.rs"], Some("s1"), Some(5), 10).unwrap();
-        assert_eq!(results, vec![("s1".to_string(), 2)]);
+        // Same turn (same session_id + start_line), should be same id
+        assert_eq!(id1, id2);
+
+        let text: String = conn
+            .query_row(
+                "SELECT full_text FROM turns WHERE session_id = 's1' AND start_line = 0",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(text, "completed");
     }
 
+    // --- Chunk tests ---
+
     #[test]
-    fn file_mentions_deleted_with_delete_at() {
+    fn insert_chunk_basic() {
         let (_tmp, conn) = test_db();
         seed_session(&conn, "s1");
 
-        insert_file_mention(&conn, "s1", 0, "src/main.rs", "Read").unwrap();
-        insert_file_mention(&conn, "s1", 0, "src/lib.rs", "Edit").unwrap();
-        insert_file_mention(&conn, "s1", 4, "src/main.rs", "Write").unwrap();
+        let turn_id = upsert_turn(&conn, "s1", 0, 1, false, "text").unwrap();
+        let emb = vec![0.5_f32; 768];
+        insert_chunk(&conn, turn_id, 0, &emb).unwrap();
+        insert_chunk(&conn, turn_id, 1, &emb).unwrap();
 
-        let deleted = delete_file_mentions_at(&conn, "s1", 0).unwrap();
-        assert_eq!(deleted, 2);
-
-        // Only line_index=4 should remain
-        let results = search_by_file_path(&conn, &["src/main.rs"], None, None, 10).unwrap();
-        assert_eq!(results, vec![("s1".to_string(), 4)]);
+        let count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM chunks WHERE turn_id = ?1",
+                params![turn_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 2);
     }
 
-    #[test]
-    fn file_search_empty_paths_returns_empty() {
-        let (_tmp, conn) = test_db();
-        let results = search_by_file_path(&conn, &[], None, None, 10).unwrap();
-        assert!(results.is_empty());
-    }
-
-    #[test]
-    fn file_search_multiple_paths_ranked_by_match_count() {
-        let (_tmp, conn) = test_db();
-        seed_session(&conn, "s1");
-
-        // Turn at line 0 mentions both files
-        insert_file_mention(&conn, "s1", 0, "src/main.rs", "Read").unwrap();
-        insert_file_mention(&conn, "s1", 0, "src/lib.rs", "Read").unwrap();
-        // Turn at line 4 mentions only one file
-        insert_file_mention(&conn, "s1", 4, "src/main.rs", "Edit").unwrap();
-
-        let results =
-            search_by_file_path(&conn, &["src/main.rs", "src/lib.rs"], None, None, 10).unwrap();
-        // Turn at line 0 matches both paths (count=2), line 4 matches one (count=1)
-        assert_eq!(results, vec![("s1".to_string(), 0), ("s1".to_string(), 4),]);
-    }
+    // --- File mention tests ---
 
     #[test]
     fn insert_file_mention_ignores_duplicates() {
         let (_tmp, conn) = test_db();
         seed_session(&conn, "s1");
 
-        insert_file_mention(&conn, "s1", 0, "src/main.rs", "Read").unwrap();
-        // Same exact record — should be silently ignored
-        insert_file_mention(&conn, "s1", 0, "src/main.rs", "Read").unwrap();
+        let turn_id = upsert_turn(&conn, "s1", 0, 1, false, "text").unwrap();
+        insert_file_mention(&conn, turn_id, "src/main.rs", "Read").unwrap();
+        insert_file_mention(&conn, turn_id, "src/main.rs", "Read").unwrap();
 
         let count: i64 = conn
             .query_row("SELECT count(*) FROM file_mentions", [], |row| row.get(0))
@@ -820,41 +584,21 @@ mod tests {
     }
 
     #[test]
-    fn get_recent_file_mentions_ordered_by_recency() {
+    fn file_mention_same_file_different_tools() {
         let (_tmp, conn) = test_db();
         seed_session(&conn, "s1");
 
-        insert_file_mention(&conn, "s1", 0, "src/old.rs", "Read").unwrap();
-        insert_file_mention(&conn, "s1", 4, "src/newer.rs", "Edit").unwrap();
-        insert_file_mention(&conn, "s1", 8, "src/newest.rs", "Write").unwrap();
-        // old.rs also touched later
-        insert_file_mention(&conn, "s1", 10, "src/old.rs", "Edit").unwrap();
+        let turn_id = upsert_turn(&conn, "s1", 0, 1, false, "text").unwrap();
+        insert_file_mention(&conn, turn_id, "src/main.rs", "Read").unwrap();
+        insert_file_mention(&conn, turn_id, "src/main.rs", "Edit").unwrap();
 
-        let recent = get_recent_file_mentions(&conn, "s1", 10).unwrap();
-        assert_eq!(recent, vec!["src/old.rs", "src/newest.rs", "src/newer.rs",]);
+        let count: i64 = conn
+            .query_row("SELECT count(*) FROM file_mentions", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 2);
     }
 
-    #[test]
-    fn get_recent_file_mentions_respects_limit() {
-        let (_tmp, conn) = test_db();
-        seed_session(&conn, "s1");
-
-        insert_file_mention(&conn, "s1", 0, "a.rs", "Read").unwrap();
-        insert_file_mention(&conn, "s1", 2, "b.rs", "Read").unwrap();
-        insert_file_mention(&conn, "s1", 4, "c.rs", "Read").unwrap();
-
-        let recent = get_recent_file_mentions(&conn, "s1", 2).unwrap();
-        assert_eq!(recent, vec!["c.rs", "b.rs"]);
-    }
-
-    #[test]
-    fn get_recent_file_mentions_empty_session() {
-        let (_tmp, conn) = test_db();
-        seed_session(&conn, "s1");
-
-        let recent = get_recent_file_mentions(&conn, "s1", 10).unwrap();
-        assert!(recent.is_empty());
-    }
+    // --- PR link tests ---
 
     #[test]
     fn insert_and_get_pr_links() {
@@ -910,19 +654,18 @@ mod tests {
             &conn,
             "s1",
             14,
-            "https://github.com/fenv-org/mementor/pull/14",
-            "fenv-org/mementor",
-            "2026-02-17T00:00:00Z",
+            "https://example.com/14",
+            "org/repo",
+            "2026-01-01T00:00:00Z",
         )
         .unwrap();
-        // Insert same link again — should be silently ignored
         insert_pr_link(
             &conn,
             "s1",
             14,
-            "https://github.com/fenv-org/mementor/pull/14",
-            "fenv-org/mementor",
-            "2026-02-17T00:00:00Z",
+            "https://example.com/14",
+            "org/repo",
+            "2026-01-01T00:00:00Z",
         )
         .unwrap();
 
@@ -936,10 +679,87 @@ mod tests {
     fn get_pr_links_empty_session() {
         let (_tmp, conn) = test_db();
         seed_session(&conn, "s1");
+        assert!(get_pr_links_for_session(&conn, "s1").unwrap().is_empty());
+    }
 
-        assert_eq!(
-            get_pr_links_for_session(&conn, "s1").unwrap(),
-            Vec::<PrLink>::new()
-        );
+    // --- FTS5 trigger tests ---
+
+    #[test]
+    fn fts5_syncs_on_insert() {
+        let (_tmp, conn) = test_db();
+        seed_session(&conn, "s1");
+
+        upsert_turn(&conn, "s1", 0, 1, false, "Rust ownership and borrowing").unwrap();
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM turns_fts WHERE turns_fts MATCH 'ownership'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn fts5_syncs_on_delete() {
+        let (_tmp, conn) = test_db();
+        seed_session(&conn, "s1");
+
+        upsert_turn(&conn, "s1", 0, 1, false, "Rust ownership and borrowing").unwrap();
+        delete_turn_at(&conn, "s1", 0).unwrap();
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM turns_fts WHERE turns_fts MATCH 'ownership'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    // --- Session cascade tests ---
+
+    #[test]
+    fn session_delete_cascades_to_all_children() {
+        let (_tmp, conn) = test_db();
+        seed_session(&conn, "s1");
+
+        // Create entries
+        insert_entry(&conn, "s1", 0, "user", "Hello", "", None).unwrap();
+
+        // Create turn with chunk and file mention
+        let turn_id = upsert_turn(&conn, "s1", 0, 1, false, "text").unwrap();
+        let emb = vec![1.0_f32; 768];
+        insert_chunk(&conn, turn_id, 0, &emb).unwrap();
+        insert_file_mention(&conn, turn_id, "src/main.rs", "Read").unwrap();
+
+        // Create PR link
+        insert_pr_link(
+            &conn,
+            "s1",
+            1,
+            "https://example.com/1",
+            "org/repo",
+            "2026-01-01T00:00:00Z",
+        )
+        .unwrap();
+
+        // Delete session — everything should cascade
+        conn.execute("DELETE FROM sessions WHERE session_id = 's1'", [])
+            .unwrap();
+
+        for table in &["entries", "turns", "chunks", "file_mentions", "pr_links"] {
+            let count: i64 = conn
+                .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            assert_eq!(
+                count, 0,
+                "Table {table} should be empty after cascade delete"
+            );
+        }
     }
 }

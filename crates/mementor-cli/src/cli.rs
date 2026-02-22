@@ -20,15 +20,6 @@ pub enum Command {
         session_id: String,
     },
 
-    /// Search stored memories by semantic similarity.
-    Query {
-        /// The text to search for.
-        text: String,
-        /// Number of results to return.
-        #[arg(short, long, default_value_t = 5)]
-        k: usize,
-    },
-
     /// Manage the embedding model.
     Model {
         #[command(subcommand)]
@@ -56,20 +47,8 @@ pub enum ModelCommand {
 pub enum HookCommand {
     /// Stop hook handler: reads stdin JSON and runs incremental ingestion.
     Stop,
-    /// `UserPromptSubmit` hook handler: reads stdin, performs RAG search,
-    /// outputs context to stdout.
-    #[command(name = "user-prompt-submit")]
-    UserPromptSubmit,
     /// `PreCompact` hook handler: ingests latest conversation and records
     /// compaction boundary before Claude Code compacts the context.
     #[command(name = "pre-compact")]
     PreCompact,
-    /// `PreToolUse` hook handler: injects past file context when Claude
-    /// accesses a file.
-    #[command(name = "pre-tool-use")]
-    PreToolUse,
-    /// `SubagentStart` hook handler: injects recently touched files into
-    /// subagent context.
-    #[command(name = "subagent-start")]
-    SubagentStart,
 }

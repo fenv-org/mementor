@@ -55,6 +55,8 @@ fn init_connection(conn: &mut Connection) -> anyhow::Result<()> {
         .context("Failed to enable WAL mode")?;
     conn.pragma_update(None, "busy_timeout", 5000)
         .context("Failed to set busy_timeout")?;
+    conn.pragma_update(None, "foreign_keys", true)
+        .context("Failed to enable foreign keys")?;
     register_vector_extension(conn)?;
     apply_migrations(conn)?;
     register_vector_table(conn)?;
@@ -76,16 +78,16 @@ fn register_vector_extension(conn: &Connection) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Register the `memories.embedding` column with sqlite-vector for search.
-/// Must be called after migrations have created the `memories` table.
+/// Register the `chunks.embedding` column with sqlite-vector for search.
+/// Must be called after migrations have created the `chunks` table.
 fn register_vector_table(conn: &Connection) -> anyhow::Result<()> {
     let options = format!("type=f32, dimension={EMBEDDING_DIMENSION}, distance=cosine");
     conn.query_row(
-        "SELECT vector_init('memories', 'embedding', ?1)",
+        "SELECT vector_init('chunks', 'embedding', ?1)",
         params![options],
         |_row| Ok(()),
     )
-    .context("Failed to call vector_init for memories table")?;
+    .context("Failed to call vector_init for chunks table")?;
     Ok(())
 }
 
@@ -170,6 +172,18 @@ mod tests {
             .pragma_query_value(None, "busy_timeout", |row| row.get(0))
             .unwrap();
         assert_eq!(timeout, 5000);
+    }
+
+    #[test]
+    fn foreign_keys_enabled() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("test_fk.db");
+        let conn = open_db(&db_path).unwrap();
+
+        let fk: bool = conn
+            .pragma_query_value(None, "foreign_keys", |row| row.get(0))
+            .unwrap();
+        assert!(fk);
     }
 
     #[test]

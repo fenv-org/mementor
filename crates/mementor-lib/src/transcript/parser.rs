@@ -27,6 +27,21 @@ pub struct ParsedMessage {
     pub is_compaction_summary: bool,
 }
 
+/// A raw entry extracted from the transcript for storage in the `entries` table.
+#[derive(Debug, PartialEq)]
+pub struct RawEntry {
+    /// 0-based line index in the JSONL file.
+    pub line_index: usize,
+    /// Entry type (e.g., `user`, `assistant`, `summary`, `file_history_snapshot`).
+    pub entry_type: String,
+    /// Text content of the entry.
+    pub content: String,
+    /// Tool summary string (pipe-separated, e.g., "Read(src/main.rs) | Edit(ci.yml)").
+    pub tool_summary: String,
+    /// Timestamp from the transcript entry.
+    pub timestamp: Option<String>,
+}
+
 /// A PR link extracted from a transcript entry.
 #[derive(Debug, PartialEq)]
 pub struct PrLinkEntry {
@@ -43,6 +58,7 @@ pub struct PrLinkEntry {
 pub struct ParseResult {
     pub messages: Vec<ParsedMessage>,
     pub pr_links: Vec<PrLinkEntry>,
+    pub raw_entries: Vec<RawEntry>,
 }
 
 impl ParsedMessage {
@@ -55,15 +71,139 @@ impl ParsedMessage {
     }
 }
 
+/// Entry types that are noise and should be skipped entirely.
+fn is_noise_type(entry_type: &str) -> bool {
+    matches!(
+        entry_type,
+        "progress" | "queue-operation" | "turn_duration" | "stop_hook_summary"
+    )
+}
+
+/// Outcome of processing a single transcript entry.
+enum EntryAction {
+    /// Push a PR link.
+    PrLink(PrLinkEntry),
+    /// Push a raw entry only (no parsed message).
+    RawOnly(RawEntry),
+    /// Push both a raw entry and a parsed message.
+    RawAndMessage(RawEntry, ParsedMessage),
+    /// Skip this line entirely.
+    Skip,
+}
+
+/// Classify and extract data from a single transcript entry.
+fn process_entry(line_idx: usize, entry: TranscriptEntry, line: &str) -> EntryAction {
+    let entry_type = entry.entry_type.as_deref().unwrap_or("");
+
+    if entry_type == "pr-link" {
+        if let Some(sid) = entry.session_id.as_ref()
+            && let Some(pr_number) = entry.pr_number
+            && let Some(pr_url) = entry.pr_url.as_ref()
+            && let Some(pr_repo) = entry.pr_repository.as_ref()
+            && let Some(ts) = entry.timestamp.as_ref()
+        {
+            return EntryAction::PrLink(PrLinkEntry {
+                line_index: line_idx,
+                session_id: sid.clone(),
+                pr_number,
+                pr_url: pr_url.clone(),
+                pr_repository: pr_repo.clone(),
+                timestamp: ts.clone(),
+            });
+        }
+        return EntryAction::Skip;
+    }
+
+    if is_noise_type(entry_type) {
+        return EntryAction::Skip;
+    }
+
+    // Resolve effective entry type for the entries table.
+    // Real transcripts use `"type": "message"` with the actual role in `message.role`,
+    // so we defer role-based resolution for "message" type to after parsing the message.
+    let effective_type = match entry_type {
+        "system" if entry.sub_type.as_deref() == Some("compact_boundary") => "compact_boundary",
+        "file-history-snapshot" => "file_history_snapshot",
+        "user" | "assistant" | "summary" | "message" => entry_type,
+        _ => return EntryAction::Skip,
+    };
+
+    let Some(message) = entry.message else {
+        if effective_type == "compact_boundary" || effective_type == "file_history_snapshot" {
+            return EntryAction::RawOnly(RawEntry {
+                line_index: line_idx,
+                entry_type: effective_type.to_string(),
+                content: String::new(),
+                tool_summary: String::new(),
+                timestamp: entry.timestamp.clone(),
+            });
+        }
+        return EntryAction::Skip;
+    };
+
+    // For "message" type entries, resolve the effective type from the message role.
+    let effective_type = if effective_type == "message" {
+        message.role.as_str()
+    } else {
+        effective_type
+    };
+
+    if message.content.has_unknown_blocks() {
+        debug!(line = line_idx, raw = %line, "message contains unknown content block type(s), ignoring those blocks");
+    }
+
+    let role = match message.role.as_str() {
+        "assistant" => MessageRole::Assistant {
+            tool_summary: message.content.extract_tool_summary(),
+        },
+        "user" => MessageRole::User,
+        _ => return EntryAction::Skip,
+    };
+
+    let text = message.content.extract_text();
+    let tool_summary_text = match &role {
+        MessageRole::Assistant { tool_summary } if !tool_summary.is_empty() => {
+            tool_summary.join(" | ")
+        }
+        _ => String::new(),
+    };
+
+    let raw = RawEntry {
+        line_index: line_idx,
+        entry_type: effective_type.to_string(),
+        content: text.clone(),
+        tool_summary: tool_summary_text,
+        timestamp: entry.timestamp.clone(),
+    };
+
+    if text.trim().is_empty() && raw.tool_summary.is_empty() {
+        return EntryAction::RawOnly(raw);
+    }
+
+    let is_compaction_summary = matches!(&role, MessageRole::User)
+        && text.starts_with(crate::config::COMPACTION_SUMMARY_PREFIX);
+
+    EntryAction::RawAndMessage(
+        raw,
+        ParsedMessage {
+            line_index: line_idx,
+            text,
+            role,
+            is_compaction_summary,
+        },
+    )
+}
+
 /// Read transcript JSONL file starting from `start_line` (0-based).
 /// Returns parsed messages with user/assistant text content, plus any PR link
-/// entries found in the transcript.
+/// entries found in the transcript, plus raw entries for the `entries` table.
 pub fn parse_transcript(path: &Path, start_line: usize) -> anyhow::Result<ParseResult> {
     let file = File::open(path)
         .with_context(|| format!("Failed to open transcript: {}", path.display()))?;
     let reader = BufReader::new(file);
     let mut messages = Vec::new();
     let mut pr_links = Vec::new();
+    let mut raw_entries = Vec::new();
 
     for (line_idx, line_result) in reader.lines().enumerate() {
         if line_idx < start_line {
@@ -90,65 +230,22 @@ pub fn parse_transcript(path: &Path, start_line: usize) -> anyhow::Result<ParseR
             }
         };
 
-        // Detect pr-link entries (no message field)
-        if entry.entry_type.as_deref() == Some("pr-link") {
-            if let Some(sid) = entry.session_id.as_ref()
-                && let Some(pr_number) = entry.pr_number
-                && let Some(pr_url) = entry.pr_url.as_ref()
-                && let Some(pr_repo) = entry.pr_repository.as_ref()
-                && let Some(ts) = entry.timestamp.as_ref()
-            {
-                pr_links.push(PrLinkEntry {
-                    line_index: line_idx,
-                    session_id: sid.clone(),
-                    pr_number,
-                    pr_url: pr_url.clone(),
-                    pr_repository: pr_repo.clone(),
-                    timestamp: ts.clone(),
-                });
+        match process_entry(line_idx, entry, &line) {
+            EntryAction::PrLink(pr) => pr_links.push(pr),
+            EntryAction::RawOnly(raw) => raw_entries.push(raw),
+            EntryAction::RawAndMessage(raw, msg) => {
+                raw_entries.push(raw);
+                messages.push(msg);
             }
-            continue;
+            EntryAction::Skip => {}
         }
-
-        let Some(message) = entry.message else {
-            continue;
-        };
-
-        if message.content.has_unknown_blocks() {
-            debug!(line = line_idx, raw = %line, "message contains unknown content block type(s), ignoring those blocks");
-        }
-
-        let role = match message.role.as_str() {
-            "assistant" => MessageRole::Assistant {
-                tool_summary: message.content.extract_tool_summary(),
-            },
-            "user" => MessageRole::User,
-            _ => continue,
-        };
-
-        let text = message.content.extract_text();
-        let has_tool_summary = matches!(
-            &role,
-            MessageRole::Assistant { tool_summary } if !tool_summary.is_empty()
-        );
-
-        // Keep the message if it has text content OR meaningful tool summaries.
-        if text.trim().is_empty() && !has_tool_summary {
-            continue;
-        }
-
-        let is_compaction_summary = matches!(&role, MessageRole::User)
-            && text.starts_with(crate::config::COMPACTION_SUMMARY_PREFIX);
-
-        messages.push(ParsedMessage {
-            line_index: line_idx,
-            text,
-            role,
-            is_compaction_summary,
-        });
     }
 
-    Ok(ParseResult { messages, pr_links })
+    Ok(ParseResult {
+        messages,
+        pr_links,
+        raw_entries,
+    })
 }
 
 #[cfg(test)]
@@ -186,6 +283,13 @@ mod tests {
         assert_eq!(msgs[1].text, "Hi there");
         assert_eq!(msgs[1].line_index, 1);
         assert!(result.pr_links.is_empty());
+
+        // Verify raw entries
+        assert_eq!(result.raw_entries.len(), 2);
+        assert_eq!(result.raw_entries[0].entry_type, "user");
+        assert_eq!(result.raw_entries[0].content, "Hello");
+        assert_eq!(result.raw_entries[1].entry_type, "assistant");
+        assert_eq!(result.raw_entries[1].content, "Hi there");
     }
 
     #[test]
@@ -232,6 +336,7 @@ mod tests {
         let result = parse_transcript(f.path(), 0).unwrap();
         assert!(result.messages.is_empty());
         assert!(result.pr_links.is_empty());
+        assert!(result.raw_entries.is_empty());
     }
 
     #[test]
@@ -274,6 +379,13 @@ mod tests {
             MessageRole::Assistant {
                 tool_summary: vec!["Edit(.github/workflows/ci.yml)".to_string()],
             }
+        );
+
+        // Verify raw entry has tool summary
+        let assistant_entry = &result.raw_entries[1];
+        assert_eq!(
+            assistant_entry.tool_summary,
+            "Edit(.github/workflows/ci.yml)"
         );
     }
 
@@ -354,5 +466,50 @@ mod tests {
         let result = parse_transcript(f.path(), 0).unwrap();
         assert!(!result.messages[0].is_compaction_summary);
         assert!(!result.messages[1].is_compaction_summary);
+    }
+
+    #[test]
+    fn noise_types_filtered() {
+        let f = write_jsonl(&[
+            r#"{"type":"user","message":{"role":"user","content":"Hello"}}"#,
+            r#"{"type":"progress","message":{"role":"assistant","content":"thinking..."}}"#,
+            r#"{"type":"queue-operation"}"#,
+            r#"{"type":"turn_duration"}"#,
+            r#"{"type":"stop_hook_summary"}"#,
+            r#"{"type":"assistant","message":{"role":"assistant","content":"Hi"}}"#,
+        ]);
+        let result = parse_transcript(f.path(), 0).unwrap();
+        assert_eq!(result.messages.len(), 2);
+        assert_eq!(result.raw_entries.len(), 2);
+    }
+
+    #[test]
+    fn raw_entries_include_timestamps() {
+        let f = write_jsonl(&[
+            r#"{"type":"user","timestamp":"2026-02-21T10:00:00Z","message":{"role":"user","content":"Hello"}}"#,
+            r#"{"type":"assistant","message":{"role":"assistant","content":"Hi"}}"#,
+        ]);
+        let result = parse_transcript(f.path(), 0).unwrap();
+        assert_eq!(
+            result.raw_entries[0].timestamp.as_deref(),
+            Some("2026-02-21T10:00:00Z")
+        );
+        assert!(result.raw_entries[1].timestamp.is_none());
+    }
+
+    #[test]
+    fn compact_boundary_creates_raw_entry() {
+        let f = write_jsonl(&[
+            r#"{"type":"system","subType":"compact_boundary","timestamp":"2026-02-21T10:00:00Z"}"#,
+            r#"{"type":"user","message":{"role":"user","content":"Hello"}}"#,
+        ]);
+        let result = parse_transcript(f.path(), 0).unwrap();
+        assert_eq!(result.messages.len(), 1);
+        assert_eq!(result.raw_entries.len(), 2);
+        assert_eq!(result.raw_entries[0].entry_type, "compact_boundary");
+        assert_eq!(
+            result.raw_entries[0].timestamp.as_deref(),
+            Some("2026-02-21T10:00:00Z")
+        );
     }
 }

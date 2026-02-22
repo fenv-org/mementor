@@ -7,9 +7,12 @@ use unicode_segmentation::UnicodeSegmentation;
 pub struct TranscriptEntry {
     #[serde(rename = "type")]
     pub entry_type: Option<String>,
+    pub sub_type: Option<String>,
     pub uuid: Option<String>,
     pub session_id: Option<String>,
     pub timestamp: Option<String>,
+    pub agent_id: Option<String>,
+    pub is_sidechain: Option<bool>,
     pub message: Option<Message>,
     pub pr_number: Option<u32>,
     pub pr_url: Option<String>,
