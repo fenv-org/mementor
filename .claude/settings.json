@@ -40,15 +40,6 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "Read|Edit|Write|NotebookEdit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "mementor hook pre-tool-use"
-          }
-        ]
-      },
-      {
         "matcher": "Task",
         "hooks": [
           {
@@ -95,24 +86,10 @@
         ]
       }
     ],
-    "SubagentStart": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "mementor hook subagent-start"
-          }
-        ]
-      }
-    ],
     "UserPromptSubmit": [
       {
         "matcher": "",
         "hooks": [
-          {
-            "type": "command",
-            "command": "mementor hook user-prompt-submit"
-          },
           {
             "type": "command",
             "command": "entire hooks claude-code user-prompt-submit"
