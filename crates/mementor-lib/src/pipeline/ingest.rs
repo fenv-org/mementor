@@ -289,9 +289,8 @@ pub fn run_ingest(
         turn_count = turns.len(),
         "Grouped messages into turns"
     );
-    for (i, turn) in turns.iter().enumerate() {
+    for turn in &turns {
         debug!(
-            turn_index = i,
             start_line = turn.start_line,
             end_line = turn.end_line,
             provisional = turn.provisional,
@@ -303,25 +302,24 @@ pub fn run_ingest(
     if turns.is_empty() {
         debug!("No turns formed from messages");
         // Still update session to advance past raw entries / PR links
-        let max_line = raw_entries
+        let last_line = raw_entries
             .iter()
             .map(|e| e.line_index)
             .chain(pr_links.iter().map(|p| p.line_index))
-            .max();
-        if let Some(max) = max_line {
-            upsert_session(
-                conn,
-                &Session {
-                    session_id: session_id.to_string(),
-                    transcript_path: transcript_path.to_string_lossy().to_string(),
-                    project_dir: project_dir.to_string(),
-                    started_at: None,
-                    last_line_index: max + 1,
-                    provisional_turn_start: None,
-                    last_compact_line_index: session.and_then(|s| s.last_compact_line_index),
-                },
-            )?;
-        }
+            .max()
+            .map_or(read_from, |m| m + 1);
+        upsert_session(
+            conn,
+            &Session {
+                session_id: session_id.to_string(),
+                transcript_path: transcript_path.to_string_lossy().to_string(),
+                project_dir: project_dir.to_string(),
+                started_at: None,
+                last_line_index: last_line,
+                provisional_turn_start: None,
+                last_compact_line_index: session.and_then(|s| s.last_compact_line_index),
+            },
+        )?;
         return Ok(());
     }
 
@@ -387,8 +385,7 @@ pub fn run_ingest(
 
         tx.commit()?;
 
-        let total_files = file_paths.len() + at_mentions.len();
-        if total_files > 0 {
+        if !file_paths.is_empty() || !at_mentions.is_empty() {
             debug!(
                 session_id = %session_id,
                 start_line = turn.start_line,
@@ -403,15 +400,11 @@ pub fn run_ingest(
         }
 
         // Update last_line_index to be beyond all messages in this turn
-        last_line_index = turn.start_line + 2;
+        last_line_index = turn.end_line + 1;
     }
 
-    // Ensure last_line_index covers all parsed messages
-    let max_message_line = messages
-        .iter()
-        .map(|m| m.line_index)
-        .max()
-        .unwrap_or(read_from);
+    // Messages are guaranteed non-empty: turns require at least one user-assistant pair.
+    let max_message_line = messages.iter().map(|m| m.line_index).max().unwrap();
     last_line_index = last_line_index.max(max_message_line + 1);
 
     // Upsert session state
@@ -428,11 +421,11 @@ pub fn run_ingest(
         },
     )?;
 
-    let total_turns = turns.len();
-    let provisional_count = usize::from(new_provisional_start.is_some());
+    let total = turns.len();
+    let provisional = usize::from(new_provisional_start.is_some());
+    let complete = total - provisional;
     info!(
-        "Ingested {total_turns} turns ({} complete, {provisional_count} provisional) for session {session_id}",
-        total_turns - provisional_count,
+        "Ingested {total} turns ({complete} complete, {provisional} provisional) for session {session_id}"
     );
 
     Ok(())

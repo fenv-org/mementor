@@ -148,32 +148,25 @@ pub fn upsert_turn(
     provisional: bool,
     full_text: &str,
 ) -> anyhow::Result<i64> {
-    conn.execute(
-        "INSERT INTO turns (session_id, start_line, end_line, provisional, full_text)
-         VALUES (?1, ?2, ?3, ?4, ?5)
-         ON CONFLICT(session_id, start_line) DO UPDATE SET
-           end_line = excluded.end_line,
-           provisional = excluded.provisional,
-           full_text = excluded.full_text",
-        params![
-            session_id,
-            start_line as i64,
-            end_line as i64,
-            i64::from(provisional),
-            full_text,
-        ],
-    )
-    .context("Failed to upsert turn")?;
-
-    // Get the rowid (last_insert_rowid works for INSERT, but for ON CONFLICT UPDATE
-    // we need to query explicitly)
     let turn_id: i64 = conn
         .query_row(
-            "SELECT id FROM turns WHERE session_id = ?1 AND start_line = ?2",
-            params![session_id, start_line as i64],
+            "INSERT INTO turns (session_id, start_line, end_line, provisional, full_text)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(session_id, start_line) DO UPDATE SET
+               end_line = excluded.end_line,
+               provisional = excluded.provisional,
+               full_text = excluded.full_text
+             RETURNING id",
+            params![
+                session_id,
+                start_line as i64,
+                end_line as i64,
+                i64::from(provisional),
+                full_text,
+            ],
             |row| row.get(0),
         )
-        .context("Failed to get turn id after upsert")?;
+        .context("Failed to upsert turn")?;
 
     Ok(turn_id)
 }

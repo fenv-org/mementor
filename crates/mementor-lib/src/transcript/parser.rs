@@ -176,11 +176,7 @@ fn process_entry(line_idx: usize, entry: TranscriptEntry, line: &str) -> EntryAc
         timestamp: entry.timestamp.clone(),
     };
 
-    let has_tool_summary = matches!(
-        &role,
-        MessageRole::Assistant { tool_summary } if !tool_summary.is_empty()
-    );
-    if text.trim().is_empty() && !has_tool_summary {
+    if text.trim().is_empty() && raw.tool_summary.is_empty() {
         return EntryAction::RawOnly(raw);
     }
 
