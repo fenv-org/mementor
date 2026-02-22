@@ -218,9 +218,7 @@ mod tests {
 
         // .claude/settings.json
         let raw = std::fs::read_to_string(runtime.context.claude_settings_path()).unwrap();
-        let settings: serde_json::Value = serde_json::from_str(&raw).unwrap();
-        assert!(settings["hooks"]["Stop"].is_array());
-        assert!(settings["hooks"]["PreCompact"].is_array());
+        assert_eq!(raw, format!("{}\n", mementor_hooks_only()));
     }
 
     #[test]

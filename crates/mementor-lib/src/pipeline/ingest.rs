@@ -301,6 +301,10 @@ pub fn run_ingest(
 
     if turns.is_empty() {
         debug!("No turns formed from messages");
+        // Clean up any existing provisional turn before clearing the pointer
+        if let Some(prov_line) = provisional_start {
+            delete_turn_at(conn, session_id, prov_line)?;
+        }
         // Still update session to advance past raw entries / PR links
         let last_line = raw_entries
             .iter()
@@ -469,8 +473,18 @@ mod tests {
         .unwrap();
 
         let session = queries::get_session(&conn, "s1").unwrap().unwrap();
-        assert!(session.provisional_turn_start.is_some());
-        assert_eq!(session.last_line_index, 2);
+        assert_eq!(
+            session,
+            queries::Session {
+                session_id: "s1".to_string(),
+                transcript_path: transcript.to_string_lossy().to_string(),
+                project_dir: "/tmp/project".to_string(),
+                started_at: None,
+                last_line_index: 2,
+                provisional_turn_start: Some(0),
+                last_compact_line_index: None,
+            }
+        );
 
         // Verify entries were stored
         let entry_count: i64 = conn
@@ -496,7 +510,7 @@ mod tests {
         let chunk_count: i64 = conn
             .query_row("SELECT count(*) FROM chunks", [], |row| row.get(0))
             .unwrap();
-        assert!(chunk_count > 0);
+        assert_eq!(chunk_count, 1);
     }
 
     #[test]

@@ -32,7 +32,7 @@ pub struct ParsedMessage {
 pub struct RawEntry {
     /// 0-based line index in the JSONL file.
     pub line_index: usize,
-    /// Entry type (e.g., "user", "assistant", "summary", "`file_history_snapshot`").
+    /// Entry type (e.g., `user`, `assistant`, `summary`, `file_history_snapshot`).
     pub entry_type: String,
     /// Text content of the entry.
     pub content: String,

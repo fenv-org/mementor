@@ -124,21 +124,6 @@ pub fn insert_entry(
     Ok(())
 }
 
-/// Delete all entries for a session from a given line index onward.
-pub fn delete_entries_from(
-    conn: &Connection,
-    session_id: &str,
-    from_line_index: usize,
-) -> anyhow::Result<usize> {
-    let deleted = conn
-        .execute(
-            "DELETE FROM entries WHERE session_id = ?1 AND line_index >= ?2",
-            params![session_id, from_line_index as i64],
-        )
-        .context("Failed to delete entries")?;
-    Ok(deleted)
-}
-
 /// Insert or update a turn. Returns the turn's rowid.
 pub fn upsert_turn(
     conn: &Connection,
@@ -351,8 +336,14 @@ mod tests {
         upsert_session(&conn, &updated).unwrap();
 
         let result = get_session(&conn, "s1").unwrap().unwrap();
-        assert_eq!(result.started_at.as_deref(), Some("2026-02-21T10:00:00Z"));
-        assert_eq!(result.last_line_index, 10);
+        assert_eq!(
+            result,
+            Session {
+                started_at: Some("2026-02-21T10:00:00Z".to_string()),
+                last_line_index: 10,
+                ..make_session("s1")
+            }
+        );
     }
 
     #[test]
@@ -391,7 +382,14 @@ mod tests {
         upsert_session(&conn, &updated).unwrap();
 
         let result = get_session(&conn, "s1").unwrap().unwrap();
-        assert_eq!(result.last_compact_line_index, Some(50));
+        assert_eq!(
+            result,
+            Session {
+                last_line_index: 200,
+                last_compact_line_index: Some(50),
+                ..make_session("s1")
+            }
+        );
     }
 
     #[test]
@@ -493,29 +491,6 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 1);
-    }
-
-    #[test]
-    fn delete_entries_from_line() {
-        let (_tmp, conn) = test_db();
-        seed_session(&conn, "s1");
-
-        insert_entry(&conn, "s1", 0, "user", "msg0", "", None).unwrap();
-        insert_entry(&conn, "s1", 1, "assistant", "msg1", "", None).unwrap();
-        insert_entry(&conn, "s1", 2, "user", "msg2", "", None).unwrap();
-        insert_entry(&conn, "s1", 3, "assistant", "msg3", "", None).unwrap();
-
-        let deleted = delete_entries_from(&conn, "s1", 2).unwrap();
-        assert_eq!(deleted, 2);
-
-        let count: i64 = conn
-            .query_row(
-                "SELECT count(*) FROM entries WHERE session_id = 's1'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(count, 2);
     }
 
     // --- Turn tests ---

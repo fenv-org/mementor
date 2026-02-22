@@ -87,9 +87,19 @@ Redesign the database schema to:
 - [x] Remove redundant `turn_index` from per-turn debug logging
 - [x] Replace `unwrap_or(read_from)` with `unwrap()` for guaranteed non-empty messages
 
+### Post-implementation: Code Review Findings
+- [x] Fix provisional turn leak in `turns.is_empty()` early return (bug, score 85)
+- [x] Remove dead code `delete_entries_from` and its test (score 75)
+- [x] Fix partial test assertions in 3 tests to use full struct comparison (score 75)
+- [x] Fix inconsistent backtick formatting in `RawEntry.entry_type` doc (score 50)
+- Skipped: stale `init_connection` doc comment (score 50) — minor
+- Skipped: unused vector search infrastructure (score 25) — intentional for Phase 4
+- Skipped: `run_ingest` FK precondition doc (score 25) — implicit, all callers correct
+- Skipped: orphaned V1 hooks (score 75) — false positive
+
 ## Results
 
-- **196 tests pass** (152 mementor-lib + 38 mementor-cli + 2 schema_snapshot + 1 schema-gen + 3 test-util)
+- **195 tests pass** (151 mementor-lib + 38 mementor-cli + 2 schema_snapshot + 1 schema-gen + 3 test-util)
 - **Zero clippy warnings** with `-D warnings`
 - Schema: 10 regular tables + 1 FTS5 virtual table + 3 indexes + 3 triggers
 - Deleted files: `pipeline/query.rs`, `hooks/prompt.rs`, `hooks/pre_tool_use.rs`,
