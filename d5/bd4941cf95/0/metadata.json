@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "d5bd4941cf95",
+  "session_id": "95aa5bff-1ac3-4153-9d42-08d5e9942b7e",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-22T08:30:35.664859Z",
+  "branch": "main",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".claude/settings.json"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "52121bf3e38e",
+  "transcript_identifier_at_start": "65b8269a-8b2e-4425-a68d-c86fa37a604c",
+  "token_usage": {
+    "input_tokens": 11402,
+    "cache_creation_tokens": 1121213,
+    "cache_read_tokens": 27350521,
+    "output_tokens": 34655,
+    "api_call_count": 276
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-22T08:30:29.977844Z",
+    "agent_lines": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 0,
+    "agent_percentage": 0
+  },
+  "transcript_path": ".claude/projects/-Users-heejoon-kang-dev-git-fenv-org-mementor/95aa5bff-1ac3-4153-9d42-08d5e9942b7e.jsonl"
+}
