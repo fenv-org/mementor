@@ -77,6 +77,16 @@ Redesign the database schema to:
 - [x] Update all remaining tests
 - [x] Verify: `cargo build`, `cargo clippy -- -D warnings`, all 196 tests pass
 
+### Post-implementation: Simplifications
+- [x] Use `RETURNING id` in `upsert_turn` to eliminate separate SELECT query
+- [x] Replace magic number `start_line + 2` with `turn.end_line + 1`
+- [x] Flatten `if let Some(max)` nesting in empty-turns branch with `map_or`
+- [x] Remove redundant `has_tool_summary` boolean; derive from `raw.tool_summary`
+- [x] Remove intermediate `total_files` variable
+- [x] Use named `complete` variable in `info!` format string
+- [x] Remove redundant `turn_index` from per-turn debug logging
+- [x] Replace `unwrap_or(read_from)` with `unwrap()` for guaranteed non-empty messages
+
 ## Results
 
 - **196 tests pass** (152 mementor-lib + 38 mementor-cli + 2 schema_snapshot + 1 schema-gen + 3 test-util)
