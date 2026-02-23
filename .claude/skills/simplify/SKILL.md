@@ -31,6 +31,10 @@ Collect the numbered list of findings from the agent's response.
 
 ## Step 2: Present findings one by one
 
+**CRITICAL**: You MUST always show the full Before/After code snippets to the
+user BEFORE asking them to decide. Never summarize or skip the code display.
+The user needs to see exactly what will change to make an informed decision.
+
 For each finding from the list, display the following to the user:
 
 ```
@@ -50,6 +54,10 @@ For each finding from the list, display the following to the user:
 [proposed simplified code]
 ​```
 ```
+
+After displaying the Before/After, add a brief one-line summary of what
+changed, followed by **5 blank lines** of visual separation before the
+`AskUserQuestion` call.
 
 Then use `AskUserQuestion` with these options:
 
