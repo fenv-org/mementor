@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "c08a5e88e873",
+  "strategy": "manual-commit",
+  "branch": "new-vs-default-convention",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "AGENTS.md",
+    "crates/mementor-lib/src/db/queries.rs",
+    "crates/mementor-lib/src/output.rs",
+    "crates/mementor-lib/src/pipeline/chunker.rs",
+    "crates/mementor-lib/src/transcript/parser.rs",
+    "crates/mementor-lib/src/transcript/types.rs",
+    "docs/rust-coding-conventions.md",
+    "history/2026-02-23_new-vs-default-convention.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/c0/8a5e88e873/0/metadata.json",
+      "transcript": "/c0/8a5e88e873/0/full.jsonl",
+      "context": "/c0/8a5e88e873/0/context.md",
+      "content_hash": "/c0/8a5e88e873/0/content_hash.txt",
+      "prompt": "/c0/8a5e88e873/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 72,
+    "cache_creation_tokens": 154217,
+    "cache_read_tokens": 5634416,
+    "output_tokens": 14293,
+    "api_call_count": 65
+  }
+}
