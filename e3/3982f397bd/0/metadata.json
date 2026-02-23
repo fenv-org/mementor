@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "e33982f397bd",
+  "session_id": "063071b3-f759-4b24-b990-dc2ed74a8edc",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-23T08:29:44.539942Z",
+  "branch": "new-vs-default-convention",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".claude/skills/simplify/SKILL.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "c1fb78f3fbc5",
+  "token_usage": {
+    "input_tokens": 205,
+    "cache_creation_tokens": 495705,
+    "cache_read_tokens": 19121230,
+    "output_tokens": 25614,
+    "api_call_count": 190
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-23T08:29:42.987361Z",
+    "agent_lines": 0,
+    "human_added": 8,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 8,
+    "agent_percentage": 0
+  },
+  "transcript_path": ".claude/projects/-Users-heejoon-kang-dev-git-fenv-org-mementor/063071b3-f759-4b24-b990-dc2ed74a8edc.jsonl"
+}
