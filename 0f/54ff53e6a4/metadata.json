@@ -1,0 +1,29 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "0f54ff53e6a4",
+  "strategy": "manual-commit",
+  "branch": "new-vs-default-convention",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "crates/mementor-lib/src/db/queries.rs",
+    "crates/mementor-lib/src/pipeline/chunker.rs",
+    "crates/mementor-lib/src/transcript/types.rs",
+    "history/2026-02-23_new-vs-default-convention.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0f/54ff53e6a4/0/metadata.json",
+      "transcript": "/0f/54ff53e6a4/0/full.jsonl",
+      "context": "/0f/54ff53e6a4/0/context.md",
+      "content_hash": "/0f/54ff53e6a4/0/content_hash.txt",
+      "prompt": "/0f/54ff53e6a4/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 203,
+    "cache_creation_tokens": 495318,
+    "cache_read_tokens": 18910396,
+    "output_tokens": 25587,
+    "api_call_count": 188
+  }
+}
