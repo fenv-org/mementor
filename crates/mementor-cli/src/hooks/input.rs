@@ -1,4 +1,12 @@
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
+
+/// Read and parse hook input JSON from a reader.
+fn read_hook_input<T: DeserializeOwned>(reader: &mut dyn std::io::Read) -> anyhow::Result<T> {
+    let mut buf = String::new();
+    reader.read_to_string(&mut buf)?;
+    Ok(serde_json::from_str(&buf)?)
+}
 
 /// Input received from the Claude Code Stop hook via stdin.
 #[derive(Debug, Deserialize)]
@@ -13,10 +21,7 @@ pub struct StopHookInput {
 
 /// Read and parse the stop hook input from stdin.
 pub fn read_stop_input(reader: &mut dyn std::io::Read) -> anyhow::Result<StopHookInput> {
-    let mut buf = String::new();
-    reader.read_to_string(&mut buf)?;
-    let input: StopHookInput = serde_json::from_str(&buf)?;
-    Ok(input)
+    read_hook_input(reader)
 }
 
 /// Input received from the Claude Code `PreCompact` hook via stdin.
@@ -37,10 +42,7 @@ pub struct PreCompactInput {
 
 /// Read and parse the pre-compact hook input from stdin.
 pub fn read_pre_compact_input(reader: &mut dyn std::io::Read) -> anyhow::Result<PreCompactInput> {
-    let mut buf = String::new();
-    reader.read_to_string(&mut buf)?;
-    let input: PreCompactInput = serde_json::from_str(&buf)?;
-    Ok(input)
+    read_hook_input(reader)
 }
 
 #[cfg(test)]

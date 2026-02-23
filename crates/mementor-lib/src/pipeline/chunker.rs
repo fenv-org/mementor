@@ -100,13 +100,6 @@ pub fn chunk_turn(turn: &Turn, tokenizer: &Tokenizer) -> Vec<Chunk> {
         return Vec::new();
     }
 
-    if raw_chunks.len() == 1 {
-        return vec![Chunk {
-            chunk_index: 0,
-            text: raw_chunks[0].to_string(),
-        }];
-    }
-
     // Apply overlap: prepend last N tokens from previous chunk
     let mut chunks = vec![Chunk {
         chunk_index: 0,

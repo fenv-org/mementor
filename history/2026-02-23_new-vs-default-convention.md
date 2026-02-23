@@ -35,4 +35,23 @@ have no Default (require args or are fallible).
 - [x] Refactor `StdIO` and `BufferedIO`
 - [x] Add `#[derive(Default)]` to 10 types
 - [x] Verify with clippy and tests (195 tests pass, clippy clean)
-- [ ] Commit
+- [x] Code simplification pass (8/12 findings addressed)
+- [x] Commit
+
+## Code Simplifications
+
+After the convention work, ran `/simplify` and addressed 8 of 12 findings:
+
+| # | Severity | Change | Status |
+|---|----------|--------|--------|
+| 1 | Medium | Generic `read_hook_input<T>` helper | Addressed |
+| 2-3 | Medium | Session construction dedup with struct update syntax | Addressed |
+| 4 | Low | Return iterator instead of Vec in `extract_file_paths` | Skipped |
+| 5 | Medium | Dedup `migration_ddl!` macro | Skipped |
+| 6 | Low | `String::from` → `.to_owned()` style | Addressed |
+| 7 | Low | Extract `HookContext` struct | Skipped |
+| 8 | Low | `.context()?; Ok(())` pattern | Skipped |
+| 9 | High | Decompose `run_ingest` into helpers | Addressed |
+| 10 | Low | Add `.context()` to `query_map` call | Addressed |
+| 11 | Low | Simplify `truncate()` with `.nth()` | Addressed |
+| 12 | Low | Remove redundant single-chunk special case | Addressed |

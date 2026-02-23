@@ -9,6 +9,7 @@ use std::path::Path;
 
 use anyhow::Context;
 use rusqlite::Connection;
+use tokenizers::Tokenizer;
 use tracing::{debug, info};
 
 use crate::db::queries::{
@@ -16,8 +17,8 @@ use crate::db::queries::{
     upsert_session, upsert_turn,
 };
 use crate::embedding::embedder::Embedder;
-use crate::pipeline::chunker::{chunk_turn, group_into_turns};
-use crate::transcript::parser::{ParseResult, parse_transcript};
+use crate::pipeline::chunker::{Turn, chunk_turn, group_into_turns};
+use crate::transcript::parser::{ParseResult, PrLinkEntry, RawEntry, parse_transcript};
 
 /// Normalize a file path to a relative path from the project root.
 ///
@@ -173,78 +174,14 @@ fn extract_at_mentions(turn_text: &str, project_dir: &str, project_root: &str) -
     result
 }
 
-/// Run the incremental ingest pipeline for a single session.
-///
-/// 1. Read new messages from the transcript starting at `last_line_index`.
-/// 2. Insert raw entries into the `entries` table.
-/// 3. If a provisional turn exists, delete it (CASCADE handles chunks + `file_mentions`).
-/// 4. Process all turns: chunk -> embed -> store (turn + chunks + `file_mentions`).
-/// 5. Update session state.
-#[allow(clippy::too_many_lines)]
-pub fn run_ingest(
-    conn: &mut Connection,
-    embedder: &mut Embedder,
+/// Insert raw entries and PR links into the database.
+fn insert_raw_data(
+    conn: &Connection,
     session_id: &str,
-    transcript_path: &Path,
-    project_dir: &str,
-    project_root: &str,
+    raw_entries: &[RawEntry],
+    pr_links: &[PrLinkEntry],
 ) -> anyhow::Result<()> {
-    let tokenizer = embedder.tokenizer().clone();
-    // Load or create session
-    let session = queries::get_session(conn, session_id)?;
-    let (start_line, provisional_start) = if let Some(s) = &session {
-        debug!(
-            session_id = %session_id,
-            last_line_index = s.last_line_index,
-            provisional_turn_start = ?s.provisional_turn_start,
-            last_compact_line_index = ?s.last_compact_line_index,
-            "Loaded existing session"
-        );
-        (s.last_line_index, s.provisional_turn_start)
-    } else {
-        debug!(session_id = %session_id, "Creating new session");
-        (0, None)
-    };
-
-    // Parse new messages from the transcript starting at start_line.
-    // If there's a provisional turn, re-read from its start to re-process it.
-    let read_from = provisional_start.unwrap_or(start_line);
-    let ParseResult {
-        messages,
-        pr_links,
-        raw_entries,
-    } = parse_transcript(transcript_path, read_from)?;
-    debug!(
-        session_id = %session_id,
-        read_from = read_from,
-        message_count = messages.len(),
-        pr_link_count = pr_links.len(),
-        raw_entry_count = raw_entries.len(),
-        "Parsed transcript messages"
-    );
-    if messages.is_empty() && pr_links.is_empty() && raw_entries.is_empty() {
-        debug!("No new data found in transcript");
-        return Ok(());
-    }
-
-    // Ensure session record exists (required for foreign keys)
-    if session.is_none() {
-        upsert_session(
-            conn,
-            &Session {
-                session_id: session_id.to_string(),
-                transcript_path: transcript_path.to_string_lossy().to_string(),
-                project_dir: project_dir.to_string(),
-                started_at: None,
-                last_line_index: read_from,
-                provisional_turn_start: None,
-                last_compact_line_index: None,
-            },
-        )?;
-    }
-
-    // Insert raw entries into the entries table (INSERT OR IGNORE for idempotency)
-    for entry in &raw_entries {
+    for entry in raw_entries {
         insert_entry(
             conn,
             session_id,
@@ -262,9 +199,7 @@ pub fn run_ingest(
             "Inserted raw entries"
         );
     }
-
-    // Insert PR links (idempotent via INSERT OR IGNORE)
-    for pr_link in &pr_links {
+    for pr_link in pr_links {
         insert_pr_link(
             conn,
             session_id,
@@ -281,60 +216,28 @@ pub fn run_ingest(
             "Inserted PR links"
         );
     }
+    Ok(())
+}
 
-    // Group messages into turns
-    let turns = group_into_turns(&messages);
-    debug!(
-        session_id = %session_id,
-        turn_count = turns.len(),
-        "Grouped messages into turns"
-    );
-    for turn in &turns {
-        debug!(
-            start_line = turn.start_line,
-            end_line = turn.end_line,
-            provisional = turn.provisional,
-            text_len = turn.full_text.len(),
-            "Turn detail"
-        );
-    }
-
-    if turns.is_empty() {
-        debug!("No turns formed from messages");
-        // Still update session to advance past raw entries / PR links
-        let last_line = raw_entries
-            .iter()
-            .map(|e| e.line_index)
-            .chain(pr_links.iter().map(|p| p.line_index))
-            .max()
-            .map_or(read_from, |m| m + 1);
-        upsert_session(
-            conn,
-            &Session {
-                session_id: session_id.to_string(),
-                transcript_path: transcript_path.to_string_lossy().to_string(),
-                project_dir: project_dir.to_string(),
-                started_at: None,
-                last_line_index: last_line,
-                provisional_turn_start: None,
-                last_compact_line_index: session.and_then(|s| s.last_compact_line_index),
-            },
-        )?;
-        return Ok(());
-    }
-
-    // If a provisional turn existed, delete it (CASCADE cleans chunks + file_mentions)
-    if let Some(prov_line) = provisional_start {
-        let deleted = delete_turn_at(conn, session_id, prov_line)?;
-        debug!("Deleted {deleted} provisional turn at start_line={prov_line}");
-    }
-
-    // Process each turn: chunk -> embed -> store
-    let mut last_line_index = read_from;
+/// Process turns: chunk, embed, and store each turn in the database.
+///
+/// Returns `(last_line_index, new_provisional_start)` for session state update.
+#[allow(clippy::too_many_arguments)]
+fn process_turns(
+    conn: &mut Connection,
+    embedder: &mut Embedder,
+    session_id: &str,
+    turns: &[Turn],
+    project_dir: &str,
+    project_root: &str,
+    tokenizer: &Tokenizer,
+    initial_last_line: usize,
+) -> anyhow::Result<(usize, Option<usize>)> {
+    let mut last_line_index = initial_last_line;
     let mut new_provisional_start: Option<usize> = None;
 
-    for turn in &turns {
-        let chunks = chunk_turn(turn, &tokenizer);
+    for turn in turns {
+        let chunks = chunk_turn(turn, tokenizer);
         debug!(
             session_id = %session_id,
             start_line = turn.start_line,
@@ -403,29 +306,138 @@ pub fn run_ingest(
         last_line_index = turn.end_line + 1;
     }
 
-    // Messages are guaranteed non-empty: turns require at least one user-assistant pair.
-    let max_message_line = messages.iter().map(|m| m.line_index).max().unwrap();
-    last_line_index = last_line_index.max(max_message_line + 1);
+    Ok((last_line_index, new_provisional_start))
+}
 
-    // Upsert session state
+/// Run the incremental ingest pipeline for a single session.
+///
+/// 1. Read new messages from the transcript starting at `last_line_index`.
+/// 2. Insert raw entries into the `entries` table.
+/// 3. If a provisional turn exists, delete it (CASCADE handles chunks + `file_mentions`).
+/// 4. Process all turns: chunk -> embed -> store (turn + chunks + `file_mentions`).
+/// 5. Update session state.
+pub fn run_ingest(
+    conn: &mut Connection,
+    embedder: &mut Embedder,
+    session_id: &str,
+    transcript_path: &Path,
+    project_dir: &str,
+    project_root: &str,
+) -> anyhow::Result<()> {
+    let tokenizer = embedder.tokenizer().clone();
+    let session = queries::get_session(conn, session_id)?;
+    let (start_line, provisional_start) = if let Some(s) = &session {
+        debug!(
+            session_id = %session_id,
+            last_line_index = s.last_line_index,
+            provisional_turn_start = ?s.provisional_turn_start,
+            last_compact_line_index = ?s.last_compact_line_index,
+            "Loaded existing session"
+        );
+        (s.last_line_index, s.provisional_turn_start)
+    } else {
+        debug!(session_id = %session_id, "Creating new session");
+        (0, None)
+    };
+
+    // Parse new messages from the transcript starting at start_line.
+    // If there's a provisional turn, re-read from its start to re-process it.
+    let read_from = provisional_start.unwrap_or(start_line);
+    let ParseResult {
+        messages,
+        pr_links,
+        raw_entries,
+    } = parse_transcript(transcript_path, read_from)?;
+    debug!(
+        session_id = %session_id,
+        read_from = read_from,
+        message_count = messages.len(),
+        pr_link_count = pr_links.len(),
+        raw_entry_count = raw_entries.len(),
+        "Parsed transcript messages"
+    );
+    if messages.is_empty() && pr_links.is_empty() && raw_entries.is_empty() {
+        debug!("No new data found in transcript");
+        return Ok(());
+    }
+
+    let existing_compact_line = session.as_ref().and_then(|s| s.last_compact_line_index);
+    let base_session = Session {
+        session_id: session_id.to_string(),
+        transcript_path: transcript_path.to_string_lossy().to_string(),
+        project_dir: project_dir.to_string(),
+        ..Session::default()
+    };
+
+    // Ensure session record exists (required for foreign keys)
+    if session.is_none() {
+        upsert_session(
+            conn,
+            &Session {
+                last_line_index: read_from,
+                ..base_session.clone()
+            },
+        )?;
+    }
+
+    insert_raw_data(conn, session_id, &raw_entries, &pr_links)?;
+
+    let turns = group_into_turns(&messages);
+    debug!(session_id = %session_id, turn_count = turns.len(), "Grouped messages into turns");
+
+    if turns.is_empty() {
+        debug!("No turns formed from messages");
+        // Still update session to advance past raw entries / PR links
+        let last_line = raw_entries
+            .iter()
+            .map(|e| e.line_index)
+            .chain(pr_links.iter().map(|p| p.line_index))
+            .max()
+            .map_or(read_from, |m| m + 1);
+        upsert_session(
+            conn,
+            &Session {
+                last_line_index: last_line,
+                last_compact_line_index: existing_compact_line,
+                ..base_session.clone()
+            },
+        )?;
+        return Ok(());
+    }
+
+    // If a provisional turn existed, delete it (CASCADE cleans chunks + file_mentions)
+    if let Some(prov_line) = provisional_start {
+        let deleted = delete_turn_at(conn, session_id, prov_line)?;
+        debug!("Deleted {deleted} provisional turn at start_line={prov_line}");
+    }
+
+    let (mut last_line_index, new_provisional_start) = process_turns(
+        conn,
+        embedder,
+        session_id,
+        &turns,
+        project_dir,
+        project_root,
+        &tokenizer,
+        read_from,
+    )?;
+
+    last_line_index = last_line_index.max(messages.iter().map(|m| m.line_index).max().unwrap() + 1);
+
     upsert_session(
         conn,
         &Session {
-            session_id: session_id.to_string(),
-            transcript_path: transcript_path.to_string_lossy().to_string(),
-            project_dir: project_dir.to_string(),
-            started_at: None,
             last_line_index,
             provisional_turn_start: new_provisional_start,
-            last_compact_line_index: session.and_then(|s| s.last_compact_line_index),
+            last_compact_line_index: existing_compact_line,
+            ..base_session
         },
     )?;
 
-    let total = turns.len();
-    let provisional = usize::from(new_provisional_start.is_some());
-    let complete = total - provisional;
+    let (total, prov) = (turns.len(), usize::from(new_provisional_start.is_some()));
     info!(
-        "Ingested {total} turns ({complete} complete, {provisional} provisional) for session {session_id}"
+        "Ingested {total} turns ({} complete, {prov} provisional) for session {session_id}",
+        total - prov
     );
 
     Ok(())
