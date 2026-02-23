@@ -2,7 +2,7 @@ use serde::Deserialize;
 use unicode_segmentation::UnicodeSegmentation;
 
 /// A single entry (line) in the Claude Code transcript JSONL file.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TranscriptEntry {
     #[serde(rename = "type")]
@@ -79,17 +79,13 @@ fn truncate(s: &str, max_graphemes: usize) -> String {
     if s.len() <= max_graphemes {
         return s.to_string();
     }
-    let mut end = s.len();
-    for (count, (idx, _)) in s.grapheme_indices(true).enumerate() {
-        if count == max_graphemes {
-            end = idx;
-            break;
-        }
-    }
-    if end == s.len() {
-        s.to_string()
-    } else {
-        format!("{}...", &s[..end])
+    match s
+        .grapheme_indices(true)
+        .nth(max_graphemes)
+        .map(|(idx, _)| idx)
+    {
+        Some(idx) => format!("{}...", &s[..idx]),
+        None => s.to_string(),
     }
 }
 

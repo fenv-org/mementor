@@ -8,14 +8,17 @@ use tracing::{debug, warn};
 use super::types::TranscriptEntry;
 
 /// Role-specific data for a parsed message.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Default, PartialEq)]
 pub enum MessageRole {
+    #[default]
     User,
-    Assistant { tool_summary: Vec<String> },
+    Assistant {
+        tool_summary: Vec<String>,
+    },
 }
 
 /// Parsed transcript messages with their line indices.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct ParsedMessage {
     /// 0-based line index in the JSONL file.
     pub line_index: usize,
@@ -28,7 +31,7 @@ pub struct ParsedMessage {
 }
 
 /// A raw entry extracted from the transcript for storage in the `entries` table.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Default, PartialEq)]
 pub struct RawEntry {
     /// 0-based line index in the JSONL file.
     pub line_index: usize,
@@ -43,7 +46,7 @@ pub struct RawEntry {
 }
 
 /// A PR link extracted from a transcript entry.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Default, PartialEq)]
 pub struct PrLinkEntry {
     pub line_index: usize,
     pub session_id: String,
@@ -54,7 +57,7 @@ pub struct PrLinkEntry {
 }
 
 /// Result of parsing a transcript file.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct ParseResult {
     pub messages: Vec<ParsedMessage>,
     pub pr_links: Vec<PrLinkEntry>,

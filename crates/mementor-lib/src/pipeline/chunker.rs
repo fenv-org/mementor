@@ -8,7 +8,7 @@ use crate::transcript::parser::{MessageRole, ParsedMessage};
 
 /// A turn groups consecutive messages for semantic coherence:
 /// Turn[n] = User[n] + Assistant[n] + User[n+1]
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Default, PartialEq)]
 pub struct Turn {
     /// JSONL line index of the first message in this turn (User[n]).
     pub start_line: usize,
@@ -82,7 +82,7 @@ pub fn group_into_turns(messages: &[ParsedMessage]) -> Vec<Turn> {
 }
 
 /// A chunk ready for embedding.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Chunk {
     /// Sequential chunk index within the turn (0-based).
     pub chunk_index: usize,
@@ -98,13 +98,6 @@ pub fn chunk_turn(turn: &Turn, tokenizer: &Tokenizer) -> Vec<Chunk> {
 
     if raw_chunks.is_empty() {
         return Vec::new();
-    }
-
-    if raw_chunks.len() == 1 {
-        return vec![Chunk {
-            chunk_index: 0,
-            text: raw_chunks[0].to_string(),
-        }];
     }
 
     // Apply overlap: prepend last N tokens from previous chunk

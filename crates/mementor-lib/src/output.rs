@@ -17,17 +17,17 @@ pub struct StdIO {
 impl StdIO {
     #[must_use]
     pub fn new() -> Self {
-        Self {
-            stdin: std::io::stdin(),
-            stdout: std::io::stdout(),
-            stderr: std::io::stderr(),
-        }
+        Self::default()
     }
 }
 
 impl Default for StdIO {
     fn default() -> Self {
-        Self::new()
+        Self {
+            stdin: std::io::stdin(),
+            stdout: std::io::stdout(),
+            stderr: std::io::stderr(),
+        }
     }
 }
 
@@ -46,6 +46,7 @@ impl ConsoleIO<Stdin, Stdout, Stderr> for StdIO {
 }
 
 /// Test implementation that captures output and provides canned stdin.
+#[derive(Default)]
 pub struct BufferedIO {
     stdin: Cursor<Vec<u8>>,
     stdout: Vec<u8>,
@@ -75,16 +76,6 @@ impl BufferedIO {
     /// Returns the captured stderr content as a string.
     pub fn stderr_to_string(&self) -> String {
         String::from_utf8_lossy(&self.stderr).into_owned()
-    }
-}
-
-impl Default for BufferedIO {
-    fn default() -> Self {
-        Self {
-            stdin: Cursor::new(Vec::new()),
-            stdout: Vec::new(),
-            stderr: Vec::new(),
-        }
     }
 }
 

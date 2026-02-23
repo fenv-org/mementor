@@ -9,7 +9,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use tracing::debug;
 
 /// Session data stored in the `sessions` table.
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Session {
     pub session_id: String,
     pub transcript_path: String,
@@ -206,7 +206,7 @@ pub fn insert_file_mention(
 }
 
 /// A PR link associated with a session.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Default, PartialEq)]
 pub struct PrLink {
     pub session_id: String,
     pub pr_number: u32,
@@ -255,9 +255,10 @@ pub fn get_pr_links_for_session(
                 pr_repository: row.get(3)?,
                 timestamp: row.get(4)?,
             })
-        })?
+        })
+        .context("Failed to execute PR links query")?
         .collect::<Result<Vec<_>, _>>()
-        .context("Failed to query PR links")?;
+        .context("Failed to read PR link rows")?;
 
     Ok(results)
 }
