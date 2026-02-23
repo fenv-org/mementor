@@ -232,43 +232,15 @@ boundaries.
 
 ## Coding Conventions
 
-### Rust Edition and Style
+### Rust
 
-- **Edition 2024** -- use all edition 2024 features and idioms.
-- Follow standard Rust formatting (`cargo fmt`).
-- Use `anyhow::Result` for fallible functions. Use `anyhow::Context` for adding
-  context to errors.
-- Use `tracing` for logging (`tracing::info!`, `tracing::debug!`, etc.).
-
-### Linting
-
-```bash
-cargo clippy -- -D warnings
-```
-
-This command **must pass with zero warnings**. All clippy lints at `warn` level
-for `all` and `pedantic` groups are enabled in the workspace `Cargo.toml`. The
-following lints are explicitly allowed:
-- `module_name_repetitions`
-- `must_use_candidate`
-- `missing_errors_doc`
-- `missing_panics_doc`
+Follow the conventions in
+[`docs/rust-coding-conventions.md`](docs/rust-coding-conventions.md).
 
 ### Deno Scripts
 
 Deno TypeScript scripts live under `.claude/`. Follow the conventions in
 [`docs/deno-script-conventions.md`](docs/deno-script-conventions.md).
-
-### Dependency Management
-
-Use `cargo add` to add dependencies. **Do not edit `Cargo.toml` dependency
-sections directly.** This ensures proper version resolution and formatting.
-
-Example:
-```bash
-cargo add -p mementor-lib anyhow
-cargo add -p mementor-lib --build cc
-```
 
 ### Git Commits
 

@@ -2,7 +2,7 @@ use serde::Deserialize;
 use unicode_segmentation::UnicodeSegmentation;
 
 /// A single entry (line) in the Claude Code transcript JSONL file.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TranscriptEntry {
     #[serde(rename = "type")]
