@@ -320,24 +320,24 @@ Each subcommand must have integration tests following the 5 rules from
 
 ## TODO
 
-- [ ] Add clap definitions for all 14 commands
-- [ ] Implement `mementor model download` command handler
-- [ ] Implement `mementor reindex` command handler
-- [ ] Implement `mementor search` (vector mode)
-- [ ] Implement `mementor search --fts` (FTS5 mode)
-- [ ] Implement `mementor search --session` (scoped search)
-- [ ] Implement `mementor sessions list` (with compaction_count)
-- [ ] Implement `mementor sessions get` (detailed single-session metadata)
-- [ ] Implement `mementor turns get`
-- [ ] Implement `mementor turns get --segment N` (compaction segment filtering)
-- [ ] Implement `mementor turns get --current` (post-last-compaction turns)
-- [ ] Implement `mementor compactions list`
-- [ ] Implement `mementor find-by-file` with path normalization
-- [ ] Implement `mementor find-by-commit` with `git show --stat`
-- [ ] Implement `mementor find-by-pr` with `pr_links` lookup
-- [ ] Implement `mementor find-related sessions`
-- [ ] Implement `mementor find-related turns` with sliding window
-- [ ] Add `--json` output for all commands
-- [ ] Add `--offset` / `--limit` pagination for all commands
-- [ ] Add `--oldest` / `--latest` sort for applicable commands
-- [ ] Write integration tests for each command (5 rules)
+- [x] ~~DEPRECATED~~ Add clap definitions for all 14 commands
+- [x] ~~DEPRECATED~~ Implement `mementor model download` command handler
+- [x] ~~DEPRECATED~~ Implement `mementor reindex` command handler
+- [x] ~~DEPRECATED~~ Implement `mementor search` (vector mode)
+- [x] ~~DEPRECATED~~ Implement `mementor search --fts` (FTS5 mode)
+- [x] ~~DEPRECATED~~ Implement `mementor search --session` (scoped search)
+- [x] ~~DEPRECATED~~ Implement `mementor sessions list` (with compaction_count)
+- [x] ~~DEPRECATED~~ Implement `mementor sessions get` (detailed single-session metadata)
+- [x] ~~DEPRECATED~~ Implement `mementor turns get`
+- [x] ~~DEPRECATED~~ Implement `mementor turns get --segment N` (compaction segment filtering)
+- [x] ~~DEPRECATED~~ Implement `mementor turns get --current` (post-last-compaction turns)
+- [x] ~~DEPRECATED~~ Implement `mementor compactions list`
+- [x] ~~DEPRECATED~~ Implement `mementor find-by-file` with path normalization
+- [x] ~~DEPRECATED~~ Implement `mementor find-by-commit` with `git show --stat`
+- [x] ~~DEPRECATED~~ Implement `mementor find-by-pr` with `pr_links` lookup
+- [x] ~~DEPRECATED~~ Implement `mementor find-related sessions`
+- [x] ~~DEPRECATED~~ Implement `mementor find-related turns` with sliding window
+- [x] ~~DEPRECATED~~ Add `--json` output for all commands
+- [x] ~~DEPRECATED~~ Add `--offset` / `--limit` pagination for all commands
+- [x] ~~DEPRECATED~~ Add `--oldest` / `--latest` sort for applicable commands
+- [x] ~~DEPRECATED~~ Write integration tests for each command (5 rules)
