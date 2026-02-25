@@ -1,0 +1,518 @@
+I suppose we don't have any sticked convention to use of `Xxxx:new()` and `Xxxx:default()`. We should decide rules for them and documentation the rules for the future session. (And, of course refactor too)
+
+---
+
+[Request interrupted by user]
+
+---
+
+생각을 바꿨어. 가능한 모든 경우에 #[derive(Default)]를 추가할 것. 예외는 생성에 실패할 가능성이 있거나, zero-argument constructing이 불가능할 경우.
+
+기본 방침은 new()를 만들어서 default()로 delegation할 것.
+custom default trait구현이 필요할 경우에는 Default trait을 구현할 것.
+
+---
+
+Base directory for this skill: /Users/heejoon.kang/dev/git/fenv-org/mementor/.claude/skills/commit
+
+# Commit Skill
+
+Perform a commit following the project's conventions. Execute the steps below in order.
+
+## 1. Pre-commit checks
+
+1. Run `cargo fmt --check`.
+   - If it fails, run `cargo fmt` automatically and include the formatted files in staging.
+2. Run `cargo clippy -- -D warnings`.
+   - If there are warnings, abort the commit and notify the user of the issues.
+
+## 2. Analyze changes
+
+Run the following commands in parallel to understand the current state:
+
+- `git status` — check untracked files (never use the `-uall` flag)
+- `git diff` — review the actual diff content of both staged and unstaged changes
+- `git log --oneline -5` — reference recent commit style
+
+## 3. Identify topics
+
+Read through the full diff output carefully and determine whether the changes span a single logical topic or multiple distinct topics.
+
+- **Single topic**: All changes relate to one coherent purpose (e.g., "add user authentication", "fix pagination bug"). Proceed directly to step 4.
+- **Multiple topics**: Changes cover more than one logical purpose (e.g., a bug fix mixed with a refactor, or a new feature alongside unrelated formatting changes). In this case:
+  1. Propose how to group the files into separate commits, explaining which files belong to which topic and why.
+  2. Use `AskUserQuestion` to present the proposed groupings and get explicit user approval before proceeding.
+  3. After approval, execute steps 4 and 5 once per approved group, in the order the user confirmed.
+
+## 4. Write the commit message
+
+Follow these rules strictly:
+
+- Language: English
+- Style: lowercase imperative mood (first character is also lowercase)
+- First line: 50 characters or fewer, focus on "what" changed
+- Only when truly necessary, add a detailed body after a blank line to explain "why"
+- Never add Co-Authored-By, attribution, or similar trailers
+
+## 5. Execute the commit
+
+1. Selectively `git add` only the relevant files for the current topic.
+   - Never include `.env`, credentials, or secret files.
+   - Never use `git add -A` or `git add .`.
+2. Pass the commit message using HEREDOC format:
+   ```bash
+   git commit -m "$(cat <<'EOF'
+   commit message here
+   EOF
+   )"
+   ```
+3. Run `git status` after the commit to verify the result.
+
+---
+
+Base directory for this skill: /Users/heejoon.kang/dev/git/fenv-org/mementor/.claude/skills/simplify
+
+# Simplify Skill
+
+Find code simplification opportunities in recently modified code and address
+them interactively.
+
+## Step 1: Find opportunities
+
+Launch a `Task` with `subagent_type: "code-simplifier:code-simplifier"` to
+analyze recently modified code. Use the following prompt for the agent:
+
+> Analyze the recently modified code in this project and find simplification
+> opportunities. For each finding, report:
+>
+> 1. **Severity**: High / Medium / Low
+> 2. **File**: full path and line range
+> 3. **Issue**: what can be simplified and why
+> 4. **Before**: the current code snippet
+> 5. **After**: the proposed simplified code snippet
+>
+> Return a numbered list of all findings. Do NOT implement any changes —
+> only report findings. Focus on clarity, consistency, and maintainability.
+> Ignore trivial style issues that `cargo fmt` would handle.
+
+Collect the numbered list of findings from the agent's response.
+
+## Step 2: Present findings one by one
+
+For each finding from the list, display the following to the user:
+
+```
+### Finding N of M — Severity
+
+**File**: `path/to/file.rs:10-25`
+
+**Issue**: [description of what can be simplified and why]
+
+**Before**:
+​```rust
+[current code]
+​```
+
+**After**:
+​```rust
+[proposed simplified code]
+​```
+```
+
+Then use `AskUserQuestion` with these options:
+
+- **Address**: Implement this simplification now
+- **Skip**: Skip this finding
+
+## Step 3: Implement addressed findings
+
+If the user selects "Address", implement the code change immediately using
+the `Edit` tool. Verify the change is correct by reading the modified file.
+
+Proceed to the next finding only after the current one is fully resolved.
+
+## Step 4: Summary
+
+After all findings have been presented, display a summary table:
+
+```
+## Summary
+
+| # | Severity | File | Status |
+|---|----------|------|--------|
+| 1 | High     | foo.rs:10-25 | Addressed |
+| 2 | Medium   | bar.rs:30-45 | Skipped |
+| ... | ... | ... | ... |
+
+**Addressed**: N / M findings
+```
+
+---
+
+[Request interrupted by user]
+
+---
+
+5 line breaks after summary. update the skill too
+
+---
+
+This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+Analysis:
+Let me trace through the conversation chronologically:
+
+1. **Initial Request**: User noted there's no convention for `Xxxx::new()` vs `Xxxx::default()` and wants to decide rules, document them, and refactor.
+
+2. **Plan Mode**: Entered plan mode. Explored codebase for all struct/enum types and their current `new()`/`Default` usage.
+
+3. **Convention Discussion**: 
+   - First proposed "Default only" (no `new()`) - user selected this
+   - User then changed mind: "가능한 모든 경우에 #[derive(Default)]를 추가할 것. 기본 방침은 new()를 만들어서 default()로 delegation할 것. custom default trait구현이 필요할 경우에는 Default trait을 구현할 것."
+   - This means: derive Default everywhere possible, `new()` delegates to `default()`, manual impl Default only when derive won't work.
+
+4. **Audit**: Found 12 types to modify (2 fix delegation, 10 add derives). Also found 2 violations: `TranscriptEntry` and `ParseResult`.
+
+5. **Additional audit**: User asked to check all other structs. Found more types that can derive Default: `RawEntry`, `PrLinkEntry`, `MessageRole` (with `#[default]` on User), `ParsedMessage`, `Turn`, `Chunk`, `Session`, `PrLink`.
+
+6. **Implementation**: Created branch, history doc, `docs/rust-coding-conventions.md`, updated `AGENTS.md`, refactored StdIO/BufferedIO, added derives to all 10 types.
+
+7. **Committed**: First commit `3cfbd9b` - "establish new() vs Default convention"
+
+8. **Simplify skill**: User invoked `/simplify`. Found 12 findings. Processing them:
+   - Finding 1 (Medium): Deduplicate `read_stop_input`/`read_pre_compact_input` → **Addressed**
+   - Finding 2+3 (Medium): Session construction dedup with struct update syntax → **Addressed** (added `Clone` to `Session`, extracted `existing_compact_line`, created `base_session`)
+   - Finding 4 (Low): Return iterator instead of Vec → User asked for before/after → **Skipped**
+   - Finding 5 (Medium): Duplicated `migration_ddl!` macro → **Skipped**
+   - Finding 6 (Low): String conversion style → User complained about not showing before/after, asked to update skill → **Addressed** (both the code change and the skill update)
+   - Finding 7 (Low): Extract HookContext → **Skipped**
+   - Finding 8 (Low): `.context()?; Ok(())` → **Skipped**
+   - Finding 9 (High): Decompose `run_ingest` → **Addressed** (extracted `insert_raw_data` and `process_turns`)
+
+9. **User feedback on /simplify skill**: 
+   - "show before vs after first. and then, summarize what are changed and then two line breaks. write this instruction to @simplify skill as the very critical instruction."
+   - Later: "5 line breaks after summary. update the skill too"
+
+10. **Current state**: After implementing Finding 9, clippy has 3 errors:
+    - `empty_line_after_doc_comments` at line 183-184
+    - `doc_lazy_continuation` at line 185  
+    - `too_many_lines` for `run_ingest` (102/100 - just 2 over)
+
+Let me check what the current errors are and what needs to be fixed.
+
+The doc comment issue is because the `run_ingest` doc comment (ending with `/// 5. Update session state.`) is followed by a blank line, then `/// Insert raw entries and PR links...` which clippy thinks is all one doc comment for `insert_raw_data`.
+
+The fix would be to NOT have a blank line between them, but instead end the `run_ingest` doc comment properly. Actually the issue is that the `run_ingest` function doc comment is ABOVE the `insert_raw_data` function, so clippy sees it as `insert_raw_data`'s doc comment.
+
+Wait, looking more carefully, the `insert_raw_data` function was inserted BEFORE `run_ingest` in the file. The doc comment at lines 178-183 is for `run_ingest` but `insert_raw_data` comes first. So the `/// 5. Update session state.` followed by blank line followed by `/// Insert raw entries...` before `fn insert_raw_data` - clippy sees all of this as doc for `insert_raw_data`.
+
+The fix: need to separate the `run_ingest` doc comment from `insert_raw_data`. The run_ingest doc comment should be moved to be right before `pub fn run_ingest`.
+
+For `run_ingest` being 102 lines (2 over limit) - need to shave off 2 more lines. Could compact some debug logging or inline some small expressions.
+
+Also, the skill update for "5 line breaks after summary" was only partially done - user said to update the skill too, and the user's last message was specifically about this.
+
+Let me also note the files that were created/modified:
+
+Files modified/created:
+- `docs/rust-coding-conventions.md` (new)
+- `AGENTS.md` (extracted Rust conventions)
+- `crates/mementor-lib/src/output.rs` (StdIO/BufferedIO refactor)
+- `crates/mementor-lib/src/transcript/parser.rs` (Default derives)
+- `crates/mementor-lib/src/transcript/types.rs` (Default derive)
+- `crates/mementor-lib/src/pipeline/chunker.rs` (Default derives)
+- `crates/mementor-lib/src/db/queries.rs` (Default derives + Clone for Session)
+- `crates/mementor-lib/src/pipeline/ingest.rs` (Session construction dedup, run_ingest decomposition)
+- `crates/mementor-cli/src/hooks/input.rs` (generic read_hook_input)
+- `crates/mementor-lib/src/embedding/embedder.rs` (String conversion style)
+- `.claude/skills/simplify/SKILL.md` (updated presentation instructions)
+- `history/2026-02-23_new-vs-default-convention.md` (history doc)
+
+Findings 10-12 have not been presented yet.
+
+The user's very last message was: "5 line breaks after summary. update the skill too" - I updated the skill to say "5 blank lines" but the user interrupted before I could continue. The actual remaining work is:
+1. Fix the 3 clippy errors in ingest.rs
+2. Continue presenting findings 10-12
+3. Run tests to verify
+4. Commit changes
+
+Summary:
+1. Primary Request and Intent:
+   - Establish a convention for `Xxxx::new()` vs `Xxxx::default()` in the Rust codebase
+   - Document the convention in a new `docs/rust-coding-conventions.md` file (extracted from `AGENTS.md`, matching the pattern of `docs/deno-script-conventions.md`)
+   - Refactor all existing types to follow the convention
+   - The agreed convention: (1) Add `#[derive(Default)]` whenever possible, (2) `new()` always delegates to `Self::default()`, (3) manual `impl Default` only when derive won't compile, (4) no Default on parameterized/fallible types
+   - After the convention commit, user invoked `/simplify` to find simplification opportunities in recently modified code
+   - User gave critical feedback about the simplify skill: always show before/after code first, then summary, then 5 blank lines before the question. Updated `.claude/skills/simplify/SKILL.md` accordingly.
+
+2. Key Technical Concepts:
+   - Rust `#[derive(Default)]` vs manual `impl Default` vs `new()` method patterns
+   - Rust edition 2024 enum default with `#[default]` attribute on variant
+   - `..Default::default()` struct update syntax for test ergonomics
+   - `serde::de::DeserializeOwned` for generic JSON deserialization helpers
+   - Function decomposition to satisfy clippy `too_many_lines` lint
+   - `#[serde(flatten)]` for shared struct fields (discussed, skipped)
+   - Clippy pedantic lints: `too_many_lines`, `too_many_arguments`, `doc_lazy_continuation`, `empty_line_after_doc_comments`
+
+3. Files and Code Sections:
+
+   - **`docs/rust-coding-conventions.md`** (NEW)
+     - Extracted from AGENTS.md; contains Edition/style, Linting, Constructors convention, Dependency management
+     - The new "Constructors: `new()` vs `Default`" section documents the full convention with examples
+
+   - **`AGENTS.md`** (modified)
+     - Replaced "Rust Edition and Style", "Linting", and "Dependency Management" sections with a single link:
+     ```markdown
+     ### Rust
+     
+     Follow the conventions in
+     [`docs/rust-coding-conventions.md`](docs/rust-coding-conventions.md).
+     ```
+
+   - **`crates/mementor-lib/src/output.rs`** (modified)
+     - StdIO: flipped delegation — `new()` now calls `Self::default()`, `impl Default` contains the construction body
+     - BufferedIO: added `#[derive(Default)]` to struct, removed manual `impl Default` block
+     ```rust
+     impl StdIO {
+         #[must_use]
+         pub fn new() -> Self {
+             Self::default()
+         }
+     }
+     impl Default for StdIO {
+         fn default() -> Self {
+             Self {
+                 stdin: std::io::stdin(),
+                 stdout: std::io::stdout(),
+                 stderr: std::io::stderr(),
+             }
+         }
+     }
+     
+     #[derive(Default)]
+     pub struct BufferedIO { ... }
+     ```
+
+   - **`crates/mementor-lib/src/transcript/parser.rs`** (modified)
+     - Added `Default` derive to: `MessageRole` (with `#[default]` on `User`), `ParsedMessage`, `RawEntry`, `PrLinkEntry`, `ParseResult`
+     ```rust
+     #[derive(Debug, Default, PartialEq)]
+     pub enum MessageRole {
+         #[default]
+         User,
+         Assistant {
+             tool_summary: Vec<String>,
+         },
+     }
+     ```
+
+   - **`crates/mementor-lib/src/transcript/types.rs`** (modified)
+     - Added `Default` to `TranscriptEntry` derive: `#[derive(Debug, Default, Deserialize)]`
+
+   - **`crates/mementor-lib/src/pipeline/chunker.rs`** (modified)
+     - Added `Default` derive to `Turn` and `Chunk`
+
+   - **`crates/mementor-lib/src/db/queries.rs`** (modified)
+     - Added `Default` derive to `Session` and `PrLink`
+     - Added `Clone` derive to `Session` (needed for struct update syntax in ingest.rs)
+     ```rust
+     #[derive(Clone, Debug, Default, PartialEq)]
+     pub struct Session { ... }
+     ```
+
+   - **`crates/mementor-cli/src/hooks/input.rs`** (modified — Finding 1)
+     - Added generic `read_hook_input<T: DeserializeOwned>` helper, simplified both `read_stop_input` and `read_pre_compact_input`
+     ```rust
+     use serde::de::DeserializeOwned;
+     
+     fn read_hook_input<T: DeserializeOwned>(reader: &mut dyn std::io::Read) -> anyhow::Result<T> {
+         let mut buf = String::new();
+         reader.read_to_string(&mut buf)?;
+         Ok(serde_json::from_str(&buf)?)
+     }
+     
+     pub fn read_stop_input(reader: &mut dyn std::io::Read) -> anyhow::Result<StopHookInput> {
+         read_hook_input(reader)
+     }
+     
+     pub fn read_pre_compact_input(reader: &mut dyn std::io::Read) -> anyhow::Result<PreCompactInput> {
+         read_hook_input(reader)
+     }
+     ```
+
+   - **`crates/mementor-lib/src/pipeline/ingest.rs`** (modified — Findings 2, 3, 9)
+     - Finding 2+3: Extracted `existing_compact_line` and `base_session` before the three Session construction sites, using struct update syntax:
+     ```rust
+     let existing_compact_line = session.as_ref().and_then(|s| s.last_compact_line_index);
+     let base_session = Session {
+         session_id: session_id.to_string(),
+         transcript_path: transcript_path.to_string_lossy().to_string(),
+         project_dir: project_dir.to_string(),
+         ..Session::default()
+     };
+     ```
+     - Finding 9: Extracted two helper functions from `run_ingest`:
+       - `insert_raw_data(conn, session_id, raw_entries, pr_links)` — inserts raw entries and PR links
+       - `process_turns(conn, embedder, session_id, turns, project_dir, project_root, tokenizer, initial_last_line)` — chunk/embed/store loop, returns `(last_line_index, new_provisional_start)`
+     - Added imports: `Turn`, `PrLinkEntry`, `RawEntry`, `Tokenizer`
+     - Removed per-turn detail debug logging to reduce line count
+     - Added `#[allow(clippy::too_many_arguments)]` on `process_turns`
+
+   - **`crates/mementor-lib/src/embedding/embedder.rs`** (modified — Finding 6)
+     - Changed: `texts.iter().copied().map(String::from).collect()` → `texts.iter().map(|&s| s.to_owned()).collect()`
+
+   - **`.claude/skills/simplify/SKILL.md`** (modified)
+     - Added CRITICAL instruction to always show Before/After code before asking
+     - Added "5 blank lines" separation requirement after summary before question
+     ```markdown
+     **CRITICAL**: You MUST always show the full Before/After code snippets to the
+     user BEFORE asking them to decide. Never summarize or skip the code display.
+     The user needs to see exactly what will change to make an informed decision.
+     ```
+
+   - **`history/2026-02-23_new-vs-default-convention.md`** (NEW)
+     - History document tracking the task
+
+4. Errors and fixes:
+   - **`cargo fmt` formatting issue**: After adding `#[default]` to `MessageRole` enum, `cargo fmt` wanted to expand the `Assistant` variant to multi-line. Fixed by running `cargo fmt`.
+   - **Missing imports after extracting helpers**: `RawEntry`, `PrLinkEntry`, `Turn`, `Tokenizer` were not imported in `ingest.rs` after extracting `insert_raw_data` and `process_turns`. Fixed by adding to import statements.
+   - **Doc comment collision** (`empty_line_after_doc_comments` + `doc_lazy_continuation`): The `run_ingest` function's doc comment (ending with `/// 5. Update session state.`) was adjacent to `insert_raw_data`'s doc comment, causing clippy to see them as one malformed doc. Attempted fix with blank line but that created `empty_line_after_doc_comments`. **STILL UNRESOLVED** — needs the `run_ingest` doc comment moved to right before `pub fn run_ingest`.
+   - **`process_turns` too many arguments (8/7)**: Fixed with `#[allow(clippy::too_many_arguments)]`.
+   - **`run_ingest` still too many lines (102/100)**: Removed per-turn detail debug logging. **STILL 2 LINES OVER** — needs further compacting.
+   - **User feedback on /simplify skill**: User explicitly complained twice about not seeing before/after code snippets. Feedback: "show before vs after first. and then, summarize what are changed and then two line breaks. write this instruction to @simplify skill as the very critical instruction." and later "5 line breaks after summary. update the skill too". Updated the skill file accordingly.
+
+5. Problem Solving:
+   - Successfully established and documented `new()` vs `Default` convention
+   - Successfully extracted Rust coding conventions to separate doc
+   - Successfully added `#[derive(Default)]` to 10 types and fixed 2 existing types
+   - Successfully deduplicated hook input readers, Session construction, and decomposed `run_ingest`
+   - Ongoing: 3 clippy errors in `ingest.rs` still need fixing (doc comment placement + too many lines)
+
+6. All user messages:
+   - "I suppose we don't have any sticked convention to use of `Xxxx:new()` and `Xxxx:default()`. We should decide rules for them and documentation the rules for the future session. (And, of course refactor too)"
+   - Selected "Default only (Recommended)" for the convention
+   - "perhaps, now it's the time to extract rust coding convention from claude.md and link it from claude.md like @docs/deno-script-conventions.md" (rejected plan exit)
+   - "생각을 바꿨어. 가능한 모든 경우에 #[derive(Default)]를 추가할 것. 예외는 생성에 실패할 가능성이 있거나, zero-argument constructing이 불가능할 경우." (changed convention)
+   - "기본 방침은 new()를 만들어서 default()로 delegation할 것. custom default trait구현이 필요할 경우에는 Default trait을 구현할 것."
+   - "check all other structs in the codebase and verify if satisfying these rules." (rejected plan exit)
+   - "then, can we populate those structs' instances more easily while writing test cases?" (rejected plan exit)
+   - Approved the final plan
+   - Selected "Current directory" for branch location
+   - `/simplify` — invoked simplify skill
+   - Finding 1: "Address"
+   - Finding 2: "before vs after" (wanted to see code first)
+   - Finding 2 (second ask): "Address"
+   - Finding 4: "before vs after" (wanted to see code first)
+   - Finding 4 (second ask): "Skip"
+   - Finding 5: "before vs after" (wanted to see code first)
+   - Finding 5 (second ask): "Skip"
+   - Finding 6: "show before vs after first. and then, summarize what are changed and then two line breaks. write this instruction to @simplify skill as the very critical instruction."
+   - Finding 6 (after skill update): "Address"
+   - Finding 7: "Skip"
+   - Finding 8: "back to finding 7" (wanted to revisit finding 7 with proper format)
+   - Finding 7 (revisited): "Skip"
+   - Finding 8 (re-presented): "Skip"
+   - Finding 9: "Address"
+   - "5 line breaks after summary. update the skill too" (interrupted, asking to update skill again)
+
+7. Pending Tasks:
+   - Fix 3 remaining clippy errors in `crates/mementor-lib/src/pipeline/ingest.rs`:
+     1. `empty_line_after_doc_comments` at line 183-184
+     2. `doc_lazy_continuation` at line 185
+     3. `too_many_lines` for `run_ingest` (102/100)
+   - Present findings 10, 11, and 12 from the simplify analysis
+   - Run tests after all fixes
+   - Update history document and commit via `/commit`
+
+8. Current Work:
+   Working on the `/simplify` skill findings. Just implemented Finding 9 (decomposing `run_ingest` into `insert_raw_data` and `process_turns` helper functions). Ran `cargo clippy -- -D warnings` which reported 3 errors that still need fixing:
+   
+   ```
+   error: empty line after doc comment (line 183-184)
+   error: doc list item without indentation (line 185)  
+   error: this function has too many lines (102/100) for run_ingest (line 320)
+   ```
+   
+   The user's very last message was: **"5 line breaks after summary. update the skill too"** — I had already updated the skill to say "5 blank lines" in the SKILL.md file. The user interrupted before I could continue with fixing the clippy errors and presenting the remaining findings.
+
+9. Optional Next Step:
+   Fix the 3 clippy errors in `crates/mementor-lib/src/pipeline/ingest.rs`:
+   - Move the `run_ingest` doc comment (lines 173-183 starting with `/// Run the ingestion pipeline...`) to be directly above `pub fn run_ingest` at line 320, leaving just `/// Insert raw entries and PR links into the database.` above `fn insert_raw_data`
+   - Compact `run_ingest` by 2 more lines (e.g., combining debug log arguments onto fewer lines or inlining small expressions)
+   Then continue presenting findings 10-12 from the simplify analysis.
+
+If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/heejoon.kang/.REDACTED.jsonl
+Please continue the conversation from where we left off without asking the user any further questions. Continue with the last task that you were asked to work on.
+
+---
+
+[Request interrupted by user for tool use]
+
+---
+
+to read the previous conversation try to use `entire` cli. `entire --help`
+
+---
+
+Base directory for this skill: /Users/heejoon.kang/dev/git/fenv-org/mementor/.claude/skills/commit
+
+# Commit Skill
+
+Perform a commit following the project's conventions. Execute the steps below in order.
+
+## 1. Pre-commit checks
+
+1. Run `cargo fmt --check`.
+   - If it fails, run `cargo fmt` automatically and include the formatted files in staging.
+2. Run `cargo clippy -- -D warnings`.
+   - If there are warnings, abort the commit and notify the user of the issues.
+
+## 2. Analyze changes
+
+Run the following commands in parallel to understand the current state:
+
+- `git status` — check untracked files (never use the `-uall` flag)
+- `git diff` — review the actual diff content of both staged and unstaged changes
+- `git log --oneline -5` — reference recent commit style
+
+## 3. Identify topics
+
+Read through the full diff output carefully and determine whether the changes span a single logical topic or multiple distinct topics.
+
+- **Single topic**: All changes relate to one coherent purpose (e.g., "add user authentication", "fix pagination bug"). Proceed directly to step 4.
+- **Multiple topics**: Changes cover more than one logical purpose (e.g., a bug fix mixed with a refactor, or a new feature alongside unrelated formatting changes). In this case:
+  1. Propose how to group the files into separate commits, explaining which files belong to which topic and why.
+  2. Use `AskUserQuestion` to present the proposed groupings and get explicit user approval before proceeding.
+  3. After approval, execute steps 4 and 5 once per approved group, in the order the user confirmed.
+
+## 4. Write the commit message
+
+Follow these rules strictly:
+
+- Language: English
+- Style: lowercase imperative mood (first character is also lowercase)
+- First line: 50 characters or fewer, focus on "what" changed
+- Only when truly necessary, add a detailed body after a blank line to explain "why"
+- Never add Co-Authored-By, attribution, or similar trailers
+
+## 5. Execute the commit
+
+1. Selectively `git add` only the relevant files for the current topic.
+   - Never include `.env`, credentials, or secret files.
+   - Never use `git add -A` or `git add .`.
+2. Pass the commit message using HEREDOC format:
+   ```bash
+   git commit -m "$(cat <<'EOF'
+   commit message here
+   EOF
+   )"
+   ```
+3. Run `git status` after the commit to verify the result.
+
+---
+
+make apr
+
+---
+
+clean up branch
