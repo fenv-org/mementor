@@ -18,14 +18,29 @@ env:
 jobs:
   build-and-test:
     runs-on: macos-latest
-    name: macOS (aarch64)
+    name: macOS (${{ matrix.arch }})
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: aarch64
+            cache-key-prefix: macos-aarch64
+            cargo-target: ""
+            extra-rustup: ""
+            check-fmt: "cargo fmt --check"
+          - arch: x86_64
+            cache-key-prefix: macos-x86_64
+            cargo-target: "--target x86_64-apple-darwin"
+            extra-rustup: "rustup target add x86_64-apple-darwin"
+            check-fmt: "true"
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - uses: ./.github/actions/setup-mise-macos
         with:
-          cache-key-prefix: macos-aarch64
+          cache-key-prefix: ${{ matrix.cache-key-prefix }}
 
       - name: Cache cargo
         uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
@@ -34,20 +49,23 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: macos-aarch64-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: macos-aarch64-cargo-
+          key: ${{ matrix.cache-key-prefix }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ matrix.cache-key-prefix }}-cargo-
 
       - name: Install Rust components
-        run: rustup component add clippy rustfmt
+        run: |
+          rustup component add clippy rustfmt
+          ${{ matrix.extra-rustup }}
 
       - name: Check formatting
-        run: cargo fmt --check
+        run: ${{ matrix.check-fmt }}
 
       - name: Clippy
-        run: cargo clippy -- -D warnings
+        run: cargo clippy ${{ matrix.cargo-target }} -- -D warnings
 
       - name: Test
+        if: matrix.arch == 'aarch64'
         run: cargo test
 
       - name: Build (release)
-        run: cargo build --release
+        run: cargo build --release ${{ matrix.cargo-target }}
