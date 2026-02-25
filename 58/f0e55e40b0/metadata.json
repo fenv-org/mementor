@@ -3,7 +3,7 @@
   "checkpoint_id": "58f0e55e40b0",
   "strategy": "manual-commit",
   "branch": "phase0-workspace-cleanup",
-  "checkpoints_count": 0,
+  "checkpoints_count": 2,
   "files_touched": [
     ".github/workflows/ci.yml"
   ],
@@ -14,6 +14,20 @@
       "context": "",
       "content_hash": "/58/f0e55e40b0/0/content_hash.txt",
       "prompt": ""
+    },
+    {
+      "metadata": "/58/f0e55e40b0/1/metadata.json",
+      "transcript": "/58/f0e55e40b0/1/full.jsonl",
+      "context": "/58/f0e55e40b0/1/context.md",
+      "content_hash": "/58/f0e55e40b0/1/content_hash.txt",
+      "prompt": "/58/f0e55e40b0/1/prompt.txt"
     }
-  ]
+  ],
+  "token_usage": {
+    "input_tokens": 306,
+    "cache_creation_tokens": 555672,
+    "cache_read_tokens": 14085788,
+    "output_tokens": 27833,
+    "api_call_count": 136
+  }
 }
