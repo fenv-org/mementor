@@ -7,6 +7,10 @@
     "code-simplifier@claude-plugins-official": true,
     "code-review@claude-plugins-official": true
   },
+  "teammateMode": "tmux",
+  "env": {
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+  },
   "hooks": {
     "PostToolUse": [
       {
