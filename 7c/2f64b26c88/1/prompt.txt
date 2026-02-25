@@ -1,0 +1,75 @@
+<teammate-message teammate_id="team-lead">
+You are "entire-agent", a teammate on the "phase1-data-layer" team. Your task is to implement three entire-cli modules in the mementor-lib crate.
+
+## Your Task
+
+Read task #2 from TaskList for full details. Claim it with TaskUpdate (set owner to "entire-agent", status to "in_progress").
+
+## Context
+
+You're working in a Rust workspace. The crate is at `crates/mementor-lib/`. The foundation is already set up:
+- `src/git/command.rs` has async `git()`, `git_in()`, `git_bytes()` functions
+- `src/git/tree.rs` will have `ls_tree()`, `show_blob()`, `show_blob_str()` (being implemented by another agent — you can use them but they may be stubs in your worktree)
+- `src/model/checkpoint.rs` has `CheckpointMeta`, `SessionMeta`, `TokenUsage`, `Attribution` types with serde Deserialize
+- `src/model/transcript.rs` has `TranscriptEntry`, `TranscriptMessage`, `ContentBlock`, `MessageRole`, `ConversationSegment` types
+- Stub files exist at `src/entire/checkpoint.rs`, `src/entire/transcript.rs`, `src/entire/cli.rs`
+
+## What to implement
+
+Replace the stub files with full implementations:
+
+### entire/transcript.rs (implement this FIRST — it's self-contained)
+- `pub fn parse_transcript(jsonl: &[u8]) -> Result<Vec<TranscriptEntry>>` — parse line by line
+- `pub fn group_into_segments(entries: &[TranscriptEntry]) -> Vec<ConversationSegment>`
+- Parse each JSON line: check "type" field
+  - "user": message.content is a String → wrap in ContentBlock::Text
+  - "assistant": message.content is an array of content blocks
+    - {"type":"text","text":"..."} → ContentBlock::Text
+    - {"type":"thinking","thinking":"..."} → ContentBlock::Thinking
+    - {"type":"tool_use","name":"...","input":{}} → ContentBlock::ToolUse
+    - {"type":"tool_result","tool_use_id":"...","content":"..."} → ContentBlock::ToolResult
+  - "file-history-snapshot": extract file paths from snapshot.trackedFileBackups keys
+  - "progress": TranscriptEntry::Progress with the line content
+  - "pr-link": TranscriptEntry::PrLink (extract pr_number, pr_url, repository from message)
+  - unknown type: TranscriptEntry::Other
+- group_into_segments: group entries into ConversationSegment. Each segment starts with a User message and includes all entries until the next User message.
+- Use types from `crate::model::*`
+- Include comprehensive unit tests with realistic JSONL fixture data
+
+### entire/checkpoint.rs
+- `pub async fn list_checkpoints() -> Result<Vec<CheckpointMeta>>`
+  1. Call `crate::git::tree::ls_tree("entire/checkpoints/v1", "")` to get shard dirs
+  2. For each shard dir, call `ls_tree("entire/checkpoints/v1", &shard)` to get checkpoint dirs
+  3. For each checkpoint dir, read metadata.json via `crate::git::tree::show_blob_str("entire/checkpoints/v1", &format!("{shard}/{id}/metadata.json"))`
+  4. Deserialize into CheckpointMeta
+  5. For each session, populate `blob_path` field
+- `pub async fn load_checkpoint(checkpoint_id: &str) -> Result<CheckpointMeta>` — derive shard from first 2 chars of ID
+- Since git/tree.rs may be a stub in your worktree, structure your code so parsing is testable independently. Test the JSON deserialization with fixture data.
+
+### entire/cli.rs
+- `pub async fn explain_short(checkpoint_id: &str) -> Result<String>` — run `entire explain --checkpoint <id> --short --no-pager`
+- `pub async fn raw_transcript(checkpoint_id: &str) -> Result<Vec<u8>>` — run `entire explain --checkpoint <id> --raw-transcript --no-pager`
+- `pub async fn status() -> Result<String>` — run `entire status`
+- `pub async fn is_available() -> bool` — check if `entire` is on PATH via `which entire` or `Command::new("entire").arg("--version")`
+- Use `tokio::process::Command` directly
+- Tests: at minimum test is_available (it may return false if entire isn't installed, that's OK)
+
+## Important conventions
+- Rust edition 2024, `anyhow::Result`
+- `cargo clippy -- -D warnings` must pass (pedantic enabled)
+- `cargo fmt` must pass
+- Allowed clippy lints: `module_name_repetitions`, `must_use_candidate`, `missing_errors_doc`, `missing_panics_doc`
+- Follow `docs/rust-coding-conventions.md`
+
+## When done
+- Run `cargo check` and `cargo clippy -- -D warnings` to verify
+- Run `cargo test --lib -p mementor-lib` for your tests
+- Mark task #2 as completed via TaskUpdate
+- Send a message to "team-lead" summarizing what you implemented
+</teammate-message>
+
+---
+
+<teammate-message teammate_id="entire-agent" color="green">
+{"type":"task_assignment","taskId":"2","subject":"Implement entire/checkpoint.rs, entire/transcript.rs, entire/cli.rs","description":"Implement three modules in crates/mementor-lib/src/entire/:\n\n1. **entire/checkpoint.rs** — Load checkpoints from entire/checkpoints/v1 branch:\n   - `pub async fn list_checkpoints() -> Result<Vec<CheckpointMeta>>` — enumerate all checkpoints by:\n     1. `git ls-tree entire/checkpoints/v1` to get 2-char shard dirs\n     2. For each shard, `git ls-tree entire/checkpoints/v1/<shard>/` to get checkpoint dirs\n     3. Read `metadata.json` from each checkpoint dir via `git show entire/checkpoints/v1:<shard>/<id>/metadata.json`\n     4. Parse into `CheckpointMeta` (defined in `crate::model::CheckpointMeta`)\n   - `pub async fn load_checkpoint(checkpoint_id: &str) -> Result<CheckpointMeta>` — load a single checkpoint\n   - Use `crate::git::tree::{ls_tree, show_blob_str}` for git operations\n   - Use `crate::model::{CheckpointMeta, SessionMeta}` types\n   - Populate `blob_path` on each SessionMeta (e.g., \"ab/cdef012345/0/full.jsonl\")\n\n2. **entire/transcript.rs** — Parse JSONL transcripts:\n   - `pub fn parse_transcript(jsonl: &[u8]) -> Result<Vec<TranscriptEntry>>` — parse line by line\n   - `pub fn group_into_segments(entries: &[TranscriptEntry]) -> Vec<ConversationSegment>` — group into user+assistant pairs\n   - Handle all JSONL entry types: \"user\", \"assistant\", \"file-history-snapshot\", \"progress\", \"pr-link\"\n   - Assistant message content is an array of content blocks: text, thinking, tool_use, tool_result\n   - User message content is a string\n   - Use types from `crate::model::{TranscriptEntry, TranscriptMessage, ContentBlock, MessageRole, ConversationSegment}`\n   - Include comprehensive unit tests with fixture JSONL data\n\n3. **entire/cli.rs** — Wrap entire CLI:\n   - `pub async fn explain_short(checkpoint_id: &str) -> Result<String>` — `entire explain --checkpoint <id> --short --no-pager`\n   - `pub async fn raw_transcript(checkpoint_id: &str) -> Result<Vec<u8>>` — `entire explain --checkpoint <id> --raw-transcript --no-pager`\n   - `pub async fn status() -> Result<String>` — `entire status` (return raw output for now)\n   - `pub async fn is_available() -> bool` — check if `entire` CLI is on PATH\n   - Use `tokio::process::Command` directly (not git command runner)\n   - Include basic tests\n\nAll functions use `anyhow::Result`. Include unit tests. Extract parsing into testable non-async functions.\n\nProject conventions:\n- Rust edition 2024\n- `cargo clippy -- -D warnings` must pass (pedantic enabled)\n- `cargo fmt` must pass\n- Follow conventions in docs/rust-coding-conventions.md","assignedBy":"entire-agent","timestamp":"2026-02-25T15:31:57.184Z"}
+</teammate-message>
