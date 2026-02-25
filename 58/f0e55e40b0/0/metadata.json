@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "58f0e55e40b0",
+  "session_id": "56552020-9a4e-4e4e-815b-fb693bd7da69",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-25T16:05:50.647845Z",
+  "branch": "phase0-workspace-cleanup",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".github/workflows/ci.yml"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "e83806e55023",
+  "checkpoint_transcript_start": 114,
+  "transcript_lines_at_start": 114,
+  "initial_attribution": {
+    "calculated_at": "2026-02-25T16:05:50.640664Z",
+    "agent_lines": 0,
+    "human_added": 18,
+    "human_modified": 8,
+    "human_removed": 0,
+    "total_committed": 18,
+    "agent_percentage": 0
+  }
+}

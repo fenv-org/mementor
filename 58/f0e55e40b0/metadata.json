@@ -1,0 +1,19 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "58f0e55e40b0",
+  "strategy": "manual-commit",
+  "branch": "phase0-workspace-cleanup",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".github/workflows/ci.yml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/58/f0e55e40b0/0/metadata.json",
+      "transcript": "/58/f0e55e40b0/0/full.jsonl",
+      "context": "",
+      "content_hash": "/58/f0e55e40b0/0/content_hash.txt",
+      "prompt": ""
+    }
+  ]
+}
