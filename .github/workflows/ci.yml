@@ -18,51 +18,14 @@ env:
 jobs:
   build-and-test:
     runs-on: macos-latest
-    name: macOS (${{ matrix.arch }})
-
-    env:
-      ORT_DYLIB_PATH: ${{ matrix.ort-dylib-path }}
-
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: aarch64
-            cache-key-prefix: macos-aarch64
-            cargo-target: ""
-            ort-dylib-path: ""
-            extra-rustup: ""
-            setup-ort: "true"
-            check-fmt: "cargo fmt --check"
-          - arch: x86_64
-            cache-key-prefix: macos-x86_64
-            cargo-target: "--target x86_64-apple-darwin"
-            ort-dylib-path: "/usr/local/lib/libonnxruntime.dylib"
-            extra-rustup: "rustup target add x86_64-apple-darwin"
-            setup-ort: |
-              if [ -f /usr/local/lib/libonnxruntime.dylib ]; then
-                echo "ONNX Runtime already available (from cache)"
-                exit 0
-              fi
-              if [ ! -f /usr/local/bin/brew ]; then
-                arch -x86_64 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-              fi
-              arch -x86_64 /usr/local/bin/brew install onnxruntime
-            check-fmt: "true"
+    name: macOS (aarch64)
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - uses: ./.github/actions/setup-mise-macos
         with:
-          cache-key-prefix: ${{ matrix.cache-key-prefix }}
-
-      - name: Cache ONNX model
-        id: model-cache
-        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
-        with:
-          path: ~/.mementor/models/gte-multilingual-base
-          key: onnx-model-gte-multilingual-base-v1
+          cache-key-prefix: macos-aarch64
 
       - name: Cache cargo
         uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
@@ -71,54 +34,20 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ matrix.cache-key-prefix }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ matrix.cache-key-prefix }}-cargo-
-
-      - name: Prepare x86_64 Homebrew directories
-        if: matrix.arch == 'x86_64'
-        run: |
-          sudo mkdir -p /usr/local/Cellar /usr/local/opt /usr/local/lib /usr/local/include
-          sudo chown -R "$(whoami)" /usr/local/Cellar /usr/local/opt /usr/local/lib /usr/local/include
-
-      - name: Cache x86_64 ONNX Runtime
-        if: matrix.arch == 'x86_64'
-        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
-        with:
-          path: |
-            /usr/local/Cellar/onnxruntime
-            /usr/local/Cellar/abseil
-            /usr/local/Cellar/protobuf
-            /usr/local/Cellar/onnx
-            /usr/local/Cellar/re2
-            /usr/local/opt/onnxruntime
-            /usr/local/opt/abseil
-            /usr/local/opt/protobuf
-            /usr/local/opt/onnx
-            /usr/local/opt/re2
-            /usr/local/lib
-          key: ${{ matrix.cache-key-prefix }}-ort-v4
-          restore-keys: ${{ matrix.cache-key-prefix }}-ort-v4
+          key: macos-aarch64-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: macos-aarch64-cargo-
 
       - name: Install Rust components
-        run: |
-          rustup component add clippy rustfmt
-          ${{ matrix.extra-rustup }}
-
-      - name: Setup ONNX Runtime
-        run: ${{ matrix.setup-ort }}
-
-      - name: Download ONNX model
-        if: steps.model-cache.outputs.cache-hit != 'true'
-        run: mise run model:download
+        run: rustup component add clippy rustfmt
 
       - name: Check formatting
-        run: ${{ matrix.check-fmt }}
+        run: cargo fmt --check
 
       - name: Clippy
-        run: cargo clippy ${{ matrix.cargo-target }} -- -D warnings
+        run: cargo clippy -- -D warnings
 
       - name: Test
-        run: cargo test ${{ matrix.cargo-target }}
+        run: cargo test
 
       - name: Build (release)
-        run: cargo build --release ${{ matrix.cargo-target }}
+        run: cargo build --release

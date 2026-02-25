@@ -13,20 +13,18 @@ vector search dependencies. Add TUI dependencies. Verify `cargo check` passes.
 Cargo.toml                  # Workspace root (3 members)
 crates/
   mementor-lib/             # Data access, git operations, types, cache
-    Cargo.toml              # serde, serde_json, anyhow, tracing, jiff
+    Cargo.toml              # serde, serde_json, anyhow, tracing, jiff, tokio
     src/
       lib.rs
+      context.rs            # Project context (paths, worktree info)
       git/                  # Git CLI wrapper
-      entire/               # Checkpoint loading + transcript parsing
-      model/                # Domain types
-      cache.rs              # In-memory data cache
+        mod.rs
+        worktree.rs         # Git worktree detection (preserved from git.rs)
   mementor-tui/             # TUI rendering, views, widgets (was mementor-cli)
     Cargo.toml              # ratatui, crossterm, clap
     src/
       lib.rs
-      app.rs                # Event loop, state machine
-      views/                # Screen views
-      widgets/              # Reusable UI components
+      app.rs                # Application stub
   mementor-main/            # Thin binary entry point
     Cargo.toml              # mementor-lib, mementor-tui
     src/main.rs
@@ -54,28 +52,42 @@ crates/
 
 **Keep**: `anyhow`, `serde`, `serde_json`, `tracing`
 
-## Existing Code to Preserve
+## Existing Code Preserved
 
 | Source | Destination |
 |--------|-------------|
 | `crates/mementor-lib/src/git.rs` (`resolve_worktree`, `ResolvedWorktree`) | `crates/mementor-lib/src/git/worktree.rs` |
-| `crates/mementor-lib/src/context.rs` (`MementorContext`, simplified) | `crates/mementor-lib/src/config.rs` |
+| `crates/mementor-lib/src/context.rs` (`MementorContext`, simplified) | `crates/mementor-lib/src/context.rs` (in-place) |
+| `crates/mementor-test-util/src/git.rs` (test helpers) | Inlined into `worktree.rs` `#[cfg(test)]` module |
+
+## Design Decisions
+
+- **context.rs stays as context.rs**: The plan doc suggested renaming to
+  config.rs, but `MementorContext` is about project context (paths, worktree),
+  not configuration. Kept the original name.
+- **No Phase 1 stubs**: The design doc mentions `entire/`, `model/`, `cache.rs`
+  but creating empty stubs adds no value. They'll be added in Phase 1.
+- **Test helpers inlined**: `init_git_repo`, `run_git`, `assert_paths_eq` moved
+  from mementor-test-util into `#[cfg(test)] mod test_helpers` in worktree.rs.
 
 ## TODO
 
-- [ ] Remove `crates/mementor-schema-gen/` from workspace
-- [ ] Remove `crates/mementor-test-util/` from workspace
-- [ ] Rename `crates/mementor-cli/` to `crates/mementor-tui/`
-- [ ] Remove `vendor/sqlite-vector/` directory
-- [ ] Remove `crates/mementor-lib/ddl/` directory
-- [ ] Remove `crates/mementor-lib/build.rs`
-- [ ] Remove old dependencies: fastembed, rusqlite, text-splitter, tokenizers,
+- [x] Remove `crates/mementor-schema-gen/` from workspace
+- [x] Remove `crates/mementor-test-util/` from workspace
+- [x] Remove `crates/mementor-cli/` (replaced by `crates/mementor-tui/`)
+- [x] Remove `vendor/sqlite-vector/` directory
+- [x] Remove `crates/mementor-lib/ddl/` directory
+- [x] Remove `crates/mementor-lib/build.rs`
+- [x] Remove old dependencies: fastembed, rusqlite, text-splitter, tokenizers,
   cc, unicode-segmentation, dirs
-- [ ] Add new dependencies: ratatui, crossterm, clap, jiff
-- [ ] Move `git.rs` → `git/worktree.rs`, preserve `resolve_worktree()`
-- [ ] Simplify `context.rs` → `config.rs`
-- [ ] Remove all old source files (db/, pipeline/, hooks/, commands/, etc.)
-- [ ] Create stub `git/mod.rs`, `entire/mod.rs`, `model/mod.rs`, `cache.rs`
-- [ ] Create stub `mementor-tui/src/app.rs`, `views/mod.rs`, `widgets/mod.rs`
-- [ ] Verify `cargo check` passes
-- [ ] Verify `cargo clippy -- -D warnings` passes
+- [x] Add new dependencies: ratatui, crossterm, clap, jiff, tokio
+- [x] Move `git.rs` → `git/worktree.rs`, preserve `resolve_worktree()`
+- [x] Simplify `context.rs` (remove DB/model/log fields)
+- [x] Remove all old source files (db/, pipeline/, embedding/, transcript/, etc.)
+- [x] Create `git/mod.rs` with re-exports
+- [x] Create `mementor-tui/` crate with stubs
+- [x] Update `mise.toml` (remove model:download, schema:dump)
+- [x] Update CI (remove ONNX, x86_64 matrix)
+- [x] Update `CLAUDE.md` for new architecture
+- [x] Verify `cargo check` passes
+- [x] Verify `cargo clippy -- -D warnings` passes
