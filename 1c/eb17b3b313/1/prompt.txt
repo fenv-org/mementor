@@ -1,0 +1,3441 @@
+Implement the following plan:
+
+# Plan: Write TUI + Plugin Pivot Design Documents
+
+## Goal
+
+Write design documents under `history/2026-02-23_tui-plugin-pivot/` for
+mementor's pivot from local RAG memory agent to TUI workspace tool + Claude
+Code plugin. Also deprecate unfinished TODOs in Phase 3-5 docs.
+
+## Deliverables
+
+1. **New**: 9 files under `history/2026-02-23_tui-plugin-pivot/`
+2. **Rewrite**: `README.md` — new project description for TUI + plugin
+3. **Update**: `history/2026-02-20_active-agent-pivot.md` — deprecation note
+4. **Update**: `history/2026-02-20_extended-data-collection.md` — deprecated
+5. **Update**: `history/2026-02-20_cli-subcommands.md` — deprecated
+6. **Update**: `history/2026-02-20_plugin.md` — deprecated
+7. **Commit** via `/commit`
+
+## Workflow
+
+1. Ask user: worktree or current directory
+2. Create feature branch
+3. Create all documents
+4. Commit via `/commit`
+
+---
+
+## File 1: `history/2026-02-23_tui-plugin-pivot/00_overview.md`
+
+```markdown
+# Mementor v2: TUI Workspace Tool + Knowledge Mining Plugin
+
+## Background
+
+After completing Phase 1 (embedding model switch, PR #34) and Phase 2 (schema
+redesign, PR #38), designing Phase 3 (extended data collection) revealed a
+fundamental problem: **mementor is duplicating work that entire-cli already
+does better**.
+
+entire-cli captures full transcripts, subagent data, token usage, line
+attribution, files touched, and AI-generated summaries — all tied to git
+commits via checkpoint trailers on the `entire/checkpoints/v1` branch. It
+provides machine-friendly access via `entire explain` CLI and a rich web
+interface at entire.io.
+
+### Why the current approach fails
+
+| Problem | Detail |
+|---------|--------|
+| **Data duplication** | Mementor re-parses transcripts that entire already stores on a git branch |
+| **Gap-filling complexity** | With manual-commit strategy, entire's Stop hook writes only to shadow branches (not `entire/checkpoints/v1`). Committed checkpoints only appear after git commits. Bridging this gap requires either dual ingest paths or empty commits. |
+| **No force-checkpoint** | entire-cli has no CLI command to trigger a checkpoint on demand. Checkpoints are created exclusively via lifecycle hooks. |
+| **Heavy infrastructure** | SQLite + sqlite-vector C compilation + ONNX embedding model (~500MB) + build.rs complexity — all to re-index data that already exists in git |
+| **Shadow branch opacity** | Temporary checkpoints on shadow branches (`entire/<commit>-<worktree>`) contain code snapshots but NO transcripts. Transcripts are read from live files during condensation. |
+
+### What entire provides
+
+| Capability | Command / Source |
+|------------|------------------|
+| List all checkpoints | `entire explain --no-pager` |
+| Checkpoint summary | `entire explain --checkpoint <id> --short --no-pager` |
+| Full transcript (raw) | `entire explain --checkpoint <id> --raw-transcript --no-pager` |
+| Parsed transcript | `entire explain --checkpoint <id> --no-pager` |
+| AI-generated summary | `entire explain --checkpoint <id> --generate` |
+| Rewind points (JSON) | `entire rewind --list` |
+| Commit → checkpoint | `entire explain --commit <sha>` |
+| Session filter | `entire explain --session <id>` |
+| **Active sessions** | **`entire status`** |
+| Checkpoint metadata | `git show entire/checkpoints/v1:<shard>/metadata.json` |
+| Session metadata | `git show entire/checkpoints/v1:<shard>/<n>/metadata.json` |
+| Raw transcript blob | `git show entire/checkpoints/v1:<shard>/<n>/full.jsonl` |
+
+### entire.io web interface
+
+- **Overview dashboard**: Metrics (throughput, iteration, continuity, streak),
+  contributions chart
+- **Checkpoint list**: Branch selector, search. Cards show PR title, commit
+  hash, time, agent badge, +/-lines, file count, session count, tokens
+- **Checkpoint detail**: Header with commit range, AI%, tokens. Left sidebar
+  with sessions list + file tree (M/A badges). Right pane with conversation
+  transcript + file diffs
+- **Transcript view**: User/assistant messages. "N tools used" collapsible
+  sections. Tool call modal with arguments
+- **File diffs**: Unified diff with dual line numbers, color-coded
+
+## Goal
+
+Pivot mementor from a local RAG memory agent to:
+
+1. **A TUI workspace tool** — terminal equivalent of entire.io for browsing
+   checkpoint history, session transcripts, file diffs, and git context. Plus
+   features entire.io doesn't have: cross-transcript search, AI-powered
+   session summaries (via `claude -p`), file history tracking, offline
+   operation, and keyboard-driven navigation.
+
+2. **A Claude Code plugin** — skills and agents that give AI agents knowledge-
+   mining capabilities over entire's checkpoint data.
+
+No local database. No embedding pipeline. No vector search. Claude itself is
+the "search engine" for the plugin — it reads checkpoint data, reasons about
+relevance, and synthesizes answers.
+
+### Why Rust + ratatui
+
+Evaluated Rust, Go (bubbletea), and TypeScript (Deno/Bun + Ink/terminal-kit).
+The JS/TS TUI ecosystem lacks a framework for complex full-screen apps:
+- **Ink**: No built-in scrolling, full re-render on state change, no complex
+  TUI apps in its ecosystem
+- **blessed/neo-blessed**: Dead (last update 5-7 years ago)
+- **terminal-kit**: Solo maintainer, partial TypeScript, minimal adoption
+- **OpenTUI**: Promising but Bun-exclusive and not production-ready
+
+Ratatui is the clear winner: constraint-based layouts, 20+ built-in widgets,
+double-buffer cell diffing, proven by gitui (18k stars) and bottom (11k stars).
+Binary size 2-15 MB vs 57-80 MB for Deno/Bun compile.
+
+Bubbletea (Go) was also considered for its Elm Architecture testability, but
+ratatui's widget richness (20+ built-in), constraint-based layout system, and
+double-buffer rendering won out for our complex multi-panel design. Testing is
+addressed by structuring code for `TestBackend` + `insta` snapshots (see
+testing architecture below).
+
+## Data Sources
+
+### entire/checkpoints/v1 branch structure
+
+```
+<id[:2]>/<id[2:]>/
+├── metadata.json           # CheckpointSummary
+│   ├── cli_version
+│   ├── checkpoint_id       # 12-char hex
+│   ├── strategy            # "manual-commit" | "auto-commit"
+│   ├── branch
+│   ├── checkpoints_count
+│   ├── files_touched[]
+│   ├── sessions[]          # paths to session subdirs
+│   └── token_usage
+│       ├── input_tokens
+│       ├── cache_creation_tokens
+│       ├── cache_read_tokens
+│       ├── output_tokens
+│       └── api_call_count
+├── 0/                      # Session index
+│   ├── metadata.json       # CommittedMetadata
+│   │   ├── session_id      # UUID
+│   │   ├── created_at
+│   │   ├── agent           # "Claude Code" | "Cursor" | ...
+│   │   ├── turn_id
+│   │   ├── token_usage
+│   │   ├── initial_attribution
+│   │   │   ├── agent_lines
+│   │   │   ├── human_added
+│   │   │   ├── human_modified
+│   │   │   ├── human_removed
+│   │   │   └── agent_percentage
+│   │   └── transcript_path
+│   ├── full.jsonl          # Raw transcript (same JSONL format)
+│   ├── prompt.txt          # Concatenated user prompts
+│   ├── context.md          # AI-generated context
+│   └── content_hash.txt    # SHA256 for dedup
+├── 1/                      # Second session (if concurrent)
+└── tasks/                  # Subagent checkpoints
+    └── <tool-use-id>/
+        ├── checkpoint.json
+        └── agent-<id>.jsonl
+```
+
+### Git commit trailers
+
+Commits created during entire-tracked sessions have:
+```
+Entire-Checkpoint: <12-char-id>
+```
+
+Extract via:
+```
+git log --format='%H %s%(trailers:key=Entire-Checkpoint,valueonly,separator=%x2C)'
+```
+
+### Transcript JSONL format
+
+Each line is a JSON object:
+```json
+{
+  "type": "user"|"assistant"|"file-history-snapshot"|"progress"|"pr-link",
+  "uuid": "<uuid>",
+  "sessionId": "<session-id>",
+  "timestamp": "2026-02-22T08:30:35.000Z",
+  "message": {
+    "role": "user"|"assistant",
+    "content": "<string-or-array>"
+  }
+}
+```
+
+Assistant messages have `content` as array of content blocks:
+```json
+[
+  {"type": "thinking", "thinking": "..."},
+  {"type": "text", "text": "..."},
+  {"type": "tool_use", "name": "Read", "input": {"file_path": "..."}}
+]
+```
+
+### file-history-snapshot format
+
+**Important**: `trackedFileBackups` is nested inside `snapshot`, NOT top-level:
+```json
+{
+  "type": "file-history-snapshot",
+  "snapshot": {
+    "trackedFileBackups": {
+      "/path/to/file": { ... }
+    }
+  }
+}
+```
+
+## Architecture
+
+### Crate structure (strip-down from 5 to 3)
+
+```
+Cargo.toml                  # Workspace root (3 members)
+crates/
+  mementor-lib/             # Data access, git operations, types, cache
+  mementor-tui/             # TUI rendering, views, widgets (was mementor-cli)
+  mementor-main/            # Thin binary entry point
+```
+
+See [01_workspace-cleanup.md](01_workspace-cleanup.md) for details.
+
+### Data access: shell out to git + entire
+
+| Factor | Decision |
+|--------|----------|
+| **Approach** | Shell out to `git` and `entire` CLI via `tokio::process::Command` |
+| **Rationale** | No extra C deps (git2/libgit2). entire CLI required anyway. Single uniform pattern. |
+| **Performance** | Git ops 5-20ms per call, invisible to users. Data cached in memory. |
+| **Caching** | Checkpoint list + commit log loaded eagerly. Transcripts + diffs loaded lazily. |
+
+### Async architecture
+
+The TUI is a long-running process. All I/O must be non-blocking to keep the
+UI responsive.
+
+**Runtime**: `tokio` (multi-thread runtime)
+
+**Thread model**:
+- **Main task**: Event loop — polls terminal events via `crossterm::event`
+  and receives results from background tasks via `tokio::sync::mpsc`
+- **Background tasks**: `tokio::spawn` for git/entire I/O, search, and
+  `claude -p` invocations
+
+**Main loop pattern**:
+```rust
+loop {
+    tokio::select! {
+        // Terminal events (key press, resize)
+        Some(event) = terminal_events.next() => {
+            app.handle_event(event);
+        }
+        // Background task results
+        Some(result) = result_rx.recv() => {
+            app.handle_result(result);
+        }
+    }
+    terminal.draw(|frame| app.render(frame))?;
+}
+```
+
+**I/O operations and their async treatment**:
+
+| Operation | Latency | Handling |
+|-----------|---------|----------|
+| `git ls-tree`, `git show` | 5-20ms | `tokio::spawn` + cache |
+| `git log`, `git diff` | 10-50ms | `tokio::spawn` + cache |
+| `entire status` | 50-200ms | `tokio::spawn` |
+| `entire explain` | 100-500ms | `tokio::spawn` with loading indicator |
+| Cross-transcript search | 1-10s | `tokio::spawn`, stream results via channel |
+| `claude -p` (AI summary) | 5-30s | `tokio::spawn`, stream output, cancelable |
+
+**Result channel**:
+```rust
+enum BackgroundResult {
+    CheckpointsLoaded(Vec<CheckpointMeta>),
+    CommitsLoaded(Vec<CommitInfo>),
+    TranscriptLoaded { checkpoint_id: String, entries: Vec<TranscriptEntry> },
+    DiffLoaded { commit_hash: String, diffs: Vec<FileDiff> },
+    SearchResult(SearchMatch),       // Streamed one at a time
+    SearchComplete { total: usize },
+    SummaryChunk(String),            // Streamed from claude -p
+    SummaryComplete,
+    Error(anyhow::Error),
+}
+```
+
+**Mouse support**:
+
+crossterm provides mouse event capture via `EnableMouseCapture` /
+`DisableMouseCapture`. The app handles:
+
+| Mouse event | Action |
+|------------|--------|
+| Left click on panel | Switch focus to clicked panel |
+| Left click on list item | Select item + switch focus |
+| Scroll up/down | Scroll the panel under the cursor |
+| Double-click on item | Open detail (equivalent to Enter) |
+
+Panel hit testing: Each view tracks its `Rect` areas after render. On mouse
+click, the app checks which panel's `Rect` contains the cursor position and
+routes the event accordingly.
+
+```rust
+fn handle_mouse(&mut self, event: MouseEvent) {
+    match event.kind {
+        MouseEventKind::Down(MouseButton::Left) => {
+            let pos = (event.column, event.row);
+            if self.sidebar_area.contains(pos) {
+                self.focus = Focus::Sidebar;
+            } else if self.main_area.contains(pos) {
+                self.focus = Focus::Main;
+            }
+        }
+        MouseEventKind::ScrollUp => {
+            self.focused_panel_mut().scroll_up(3);
+        }
+        MouseEventKind::ScrollDown => {
+            self.focused_panel_mut().scroll_down(3);
+        }
+        _ => {}
+    }
+}
+```
+
+**Startup sequence**:
+1. Render empty UI immediately (< 50ms to interactive)
+2. `tokio::spawn` checkpoint list loading
+3. `tokio::spawn` commit log loading
+4. UI shows loading spinner until data arrives
+5. On first data arrival, render checkpoint list
+
+### Caching strategy
+
+```rust
+struct DataCache {
+    checkpoints: Vec<CheckpointMeta>,             // Loaded on startup
+    commits: Vec<CommitInfo>,                      // Loaded on startup
+    transcripts: LruCache<String, Vec<TranscriptEntry>>,  // Lazy
+    diffs: LruCache<String, String>,              // Lazy
+    summaries: HashMap<String, CheckpointSummary>, // Lazy
+}
+```
+
+## Branch Filtering in TUI
+
+The TUI branch selector (`b` key) excludes entire's internal branches:
+
+- `entire/checkpoints/v1` (and any future `v2`, `v3`, ...)
+- `entire/<commit>-<worktree>` shadow branches
+
+**Filter rule**: Exclude any branch matching `entire/*`. Unlike entire.io's
+dashboard which shows all branches, mementor shows only user-facing branches.
+
+## AI-Powered Session Summary via `claude -p`
+
+`entire explain --checkpoint <id> --generate` provides AI summaries, but only
+for committed checkpoints and only with entire's fixed prompt. Mementor goes
+further by running `claude -p` (headless/pipe mode) with custom prompts.
+
+### Use cases
+
+| Use case | How |
+|----------|-----|
+| **Summarize a session** | `claude -p --allowed-tools 'Bash(mementor *)' "Summarize checkpoint <id>"` |
+| **Compare sessions** | `claude -p --allowed-tools 'Bash(mementor *)' "Compare <id1> and <id2>"` |
+| **Extract decisions** | `claude -p --allowed-tools 'Bash(mementor *)' "What decisions were made in <id>?"` |
+| **Active session recovery** | `claude -p --allowed-tools 'Bash(mementor *),Read' "Search for <topic> in current session"` |
+
+### Integration points
+
+1. **TUI**: `s` key on a checkpoint to generate/view AI summary. Runs
+   `claude -p` in background, streams result into a popup panel.
+2. **CLI**: `mementor summarize <checkpoint-id> [--prompt "<custom>"]`
+   subcommand wraps `claude -p`.
+
+**Note**: Plugin skills (`/recall`, `knowledge-miner`) do NOT use `claude -p`.
+They already run inside Claude Code as subagents and can directly use their
+allowed tools (Bash, Read, Grep) to query mementor data. `claude -p` is only
+for standalone TUI/CLI use where there's no parent Claude Code context.
+
+### Why this is better than `entire explain --generate`
+
+- **Custom prompts**: Ask specific questions, not just "summarize"
+- **Tool access**: Claude can call `mementor` subcommands to cross-reference
+- **Active sessions**: Works on live transcripts, not just committed checkpoints
+- **Agent composition**: knowledge-miner can orchestrate multiple `claude -p` calls
+
+**Prerequisite**: `claude` CLI must be installed. Degrades gracefully if
+unavailable.
+
+## Active Session Awareness via `entire status`
+
+`entire status` reveals currently active sessions:
+
+```
+Enabled (manual-commit)
+
+Active Sessions:
+  /Users/.../mementor (main)
+    [Claude Code] 063071b   started 1d ago, active 1h ago
+      "I suppose we don't have any sticked convention..."
+
+  /Users/.../mementor-agent1 (agent1)
+    [Claude Code] 7af898b   started 1d ago, active 1h ago
+      "what's the next phase in @history/..."
+```
+
+### Recovering forgotten context after compaction
+
+The `/recall` skill can:
+1. Run `entire status` to find active sessions
+2. Locate the live transcript file (path derivable from session ID)
+3. Search the **full transcript** including compacted portions
+4. Return relevant context that was lost to compaction
+
+This provides value even during active sessions — **intra-session recovery**
+after compaction events.
+
+### Live transcript path derivation
+
+```
+~/.claude/projects/<project-hash>/<session-id>.jsonl
+```
+
+## Features Beyond entire.io
+
+| Feature | Description | How |
+|---------|-------------|-----|
+| **Active session recall** | Search compacted context in live sessions | `entire status` → locate transcript → search full JSONL |
+| **Cross-transcript search** | Search across ALL transcripts | Scan cached transcripts with substring/regex match |
+| **AI session summary** | Generate summaries with custom prompts | `claude -p --allowed-tools ...` — not just fixed "generate" |
+| **Clean branch list** | Exclude `entire/*` branches from TUI | Filter on `git branch` output |
+| **File history** | "Which sessions touched this file?" | Filter checkpoints by `files_touched` metadata |
+| **Session timeline** | Chronological view across branches | Sort all checkpoints by `created_at` |
+| **Commit attribution** | AI% per commit with line breakdown | Display `initial_attribution` from metadata |
+| **Keyboard-driven** | Vim-style navigation throughout | j/k/g/G/Ctrl-d/Ctrl-u in all views |
+| **Mouse support** | Click panels to focus, scroll with wheel | crossterm mouse capture + per-panel hit testing |
+| **Offline** | No network required | Reads from local git branch only |
+| **Fast startup** | Rust binary, no browser | Target <200ms to interactive |
+| **Branch comparison** | Compare checkpoints across branches | Switch branches with `b`, see different history |
+
+## Testing Architecture
+
+### Design principles for testable ratatui code
+
+To achieve "screen state → visual assertion + user action → logic → feedback"
+testing, the codebase enforces these patterns:
+
+1. **Pure `handle_event` functions**: Every view extracts event handling into
+   a pure function: `fn handle_key(&mut self, key: KeyEvent) -> Action`. No
+   terminal I/O inside event handlers.
+
+2. **Pure `render` functions**: Every view renders to a `&mut Buffer` via the
+   `Widget` trait. No side effects in render code.
+
+3. **State is data, not UI**: App state is a plain struct. Views are stateless
+   renderers of that state. This enables:
+   - Construct any state in tests
+   - Render to `TestBackend`
+   - Assert the buffer matches expected output
+
+### Testing layers
+
+| Layer | Tool | What it tests |
+|-------|------|---------------|
+| **Widget unit test** | `Buffer` directly | Single widget renders correctly for a given state |
+| **View snapshot test** | `TestBackend` + `insta` | Full screen composition matches expected snapshot |
+| **Event handler test** | Direct function call | Key event → state transition is correct |
+| **Integration test** | State + events + render | Multi-step: state → render → key → state → render |
+| **Data layer test** | Mock git/entire output | Checkpoint parsing, transcript parsing, caching |
+
+### Example: Checkpoint list view test
+
+```rust
+#[test]
+fn test_checkpoint_list_navigation() {
+    // 1. Construct state with mock data
+    let mut app = App::with_checkpoints(vec![
+        mock_checkpoint("aaa", "fix bug"),
+        mock_checkpoint("bbb", "add feature"),
+    ]);
+
+    // 2. Render initial state
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    terminal.draw(|f| app.render(f)).unwrap();
+    insta::assert_snapshot!("initial", terminal.backend());
+
+    // 3. Simulate key press
+    app.handle_key(KeyCode::Char('j').into());
+
+    // 4. Render after interaction
+    terminal.draw(|f| app.render(f)).unwrap();
+    insta::assert_snapshot!("after_j", terminal.backend());
+
+    // 5. Assert state
+    assert_eq!(app.selected_index(), 1);
+}
+```
+
+### Snapshot testing with insta
+
+- Snapshots stored in `snapshots/` directories alongside tests
+- `cargo insta review` for interactive snapshot review
+- CI runs `cargo insta test --check` to detect regressions
+- Text-only (no color in snapshots), but color correctness tested via
+  `Buffer::set_style` assertions where critical
+
+### Data layer testing
+
+Git and entire CLI calls are abstracted behind async traits:
+
+```rust
+#[cfg_attr(test, mockall::automock)]
+pub trait GitRunner: Send + Sync {
+    async fn run(&self, args: &[&str]) -> Result<String>;
+}
+```
+
+Tests inject mock implementations that return fixture data (captured git
+output). No real git repo or entire CLI needed for data layer unit tests.
+
+## Existing Code to Preserve
+
+| File | What | Where it goes |
+|------|------|---------------|
+| `crates/mementor-lib/src/git.rs` | `resolve_worktree()`, `ResolvedWorktree` | `mementor-lib/src/git/worktree.rs` |
+| `crates/mementor-lib/src/context.rs` | `MementorContext` (simplify) | `mementor-lib/src/config.rs` |
+
+Everything else is new code.
+
+## Implementation Phases
+
+| Phase | Document | Scope |
+|-------|----------|-------|
+| 0 | [01_workspace-cleanup.md](01_workspace-cleanup.md) | Strip deps, rename crates, scaffold |
+| 1 | [02_data-layer.md](02_data-layer.md) | git/, entire/, model/, cache.rs |
+| 2 | [03_tui-checkpoint-list.md](03_tui-checkpoint-list.md) | App shell + checkpoint list view |
+| 3 | [04_detail-transcript-diff.md](04_detail-transcript-diff.md) | Detail, transcript, diff, git log views |
+| 4 | [05_search.md](05_search.md) | Cross-transcript search, active session |
+| 5 | [06_cli-subcommands.md](06_cli-subcommands.md) | JSON CLI subcommands |
+| 6 | [07_plugin.md](07_plugin.md) | Plugin files, skills, agents |
+| 7 | [08_cleanup-docs.md](08_cleanup-docs.md) | Deprecate hooks, update docs |
+
+## Future Work
+
+- **Pre-built search index**: Lightweight keyword index if search becomes slow
+- **Session diff**: Compare two checkpoints side by side
+- **Export**: Export checkpoint transcript as markdown
+- **Entire integration**: If entire adds `force-checkpoint` CLI or MCP server
+- **Metrics dashboard**: Terminal equivalent of entire.io's overview page
+
+## Previous Architecture
+
+- [active-agent-pivot](../2026-02-20_active-agent-pivot.md) — **DEPRECATED**,
+  superseded by this document
+```
+
+---
+
+## File 2: `REDACTED.md`
+
+```markdown
+# Phase 0: Workspace Cleanup + Scaffold
+
+Parent: [00_overview.md](00_overview.md)
+
+## Goal
+
+Strip the workspace from 5 crates to 3. Remove all SQLite, embedding, and
+vector search dependencies. Add TUI dependencies. Verify `cargo check` passes.
+
+## Crate Structure
+
+```
+Cargo.toml                  # Workspace root (3 members)
+crates/
+  mementor-lib/             # Data access, git operations, types, cache
+    Cargo.toml              # serde, serde_json, anyhow, tracing, jiff
+    src/
+      lib.rs
+      git/                  # Git CLI wrapper
+      entire/               # Checkpoint loading + transcript parsing
+      model/                # Domain types
+      cache.rs              # In-memory data cache
+  mementor-tui/             # TUI rendering, views, widgets (was mementor-cli)
+    Cargo.toml              # ratatui, crossterm, clap
+    src/
+      lib.rs
+      app.rs                # Event loop, state machine
+      views/                # Screen views
+      widgets/              # Reusable UI components
+  mementor-main/            # Thin binary entry point
+    Cargo.toml              # mementor-lib, mementor-tui
+    src/main.rs
+```
+
+## Removed
+
+- `crates/mementor-schema-gen/` (no SQLite)
+- `crates/mementor-test-util/` (rebuilt inline)
+- `crates/mementor-cli/` → renamed to `crates/mementor-tui/`
+- `vendor/sqlite-vector/` (no C compilation)
+- `crates/mementor-lib/ddl/` (no schema files)
+- `crates/mementor-lib/build.rs` (no cc build)
+
+## Dependencies
+
+| Remove | Add |
+|--------|-----|
+| `fastembed` (ONNX runtime, ~500MB) | `ratatui` (TUI framework) |
+| `rusqlite` (bundled SQLite) | `crossterm` (terminal backend) |
+| `text-splitter` + `tokenizers` | `clap` (CLI argument parsing) |
+| `cc` (C compiler for build.rs) | `jiff` (time parsing) |
+| `unicode-segmentation` | `tokio` (async runtime) |
+| `dirs` | |
+
+**Keep**: `anyhow`, `serde`, `serde_json`, `tracing`
+
+## Existing Code to Preserve
+
+| Source | Destination |
+|--------|-------------|
+| `crates/mementor-lib/src/git.rs` (`resolve_worktree`, `ResolvedWorktree`) | `crates/mementor-lib/src/git/worktree.rs` |
+| `crates/mementor-lib/src/context.rs` (`MementorContext`, simplified) | `crates/mementor-lib/src/config.rs` |
+
+## TODO
+
+- [ ] Remove `crates/mementor-schema-gen/` from workspace
+- [ ] Remove `crates/mementor-test-util/` from workspace
+- [ ] Rename `crates/mementor-cli/` to `crates/mementor-tui/`
+- [ ] Remove `vendor/sqlite-vector/` directory
+- [ ] Remove `crates/mementor-lib/ddl/` directory
+- [ ] Remove `crates/mementor-lib/build.rs`
+- [ ] Remove old dependencies: fastembed, rusqlite, text-splitter, tokenizers,
+  cc, unicode-segmentation, dirs
+- [ ] Add new dependencies: ratatui, crossterm, clap, jiff
+- [ ] Move `git.rs` → `git/worktree.rs`, preserve `resolve_worktree()`
+- [ ] Simplify `context.rs` → `config.rs`
+- [ ] Remove all old source files (db/, pipeline/, hooks/, commands/, etc.)
+- [ ] Create stub `git/mod.rs`, `entire/mod.rs`, `model/mod.rs`, `cache.rs`
+- [ ] Create stub `mementor-tui/src/app.rs`, `views/mod.rs`, `widgets/mod.rs`
+- [ ] Verify `cargo check` passes
+- [ ] Verify `cargo clippy -- -D warnings` passes
+```
+
+---
+
+## File 3: `history/2026-02-23_tui-plugin-pivot/02_data-layer.md`
+
+```markdown
+# Phase 1: Data Layer
+
+Parent: [00_overview.md](00_overview.md)
+Depends on: [01_workspace-cleanup.md](01_workspace-cleanup.md)
+
+## Goal
+
+Implement the mementor-lib data layer: git command runner, checkpoint loading,
+transcript parsing, entire CLI wrapper, and in-memory cache. Unit tests with
+fixture data.
+
+## Module Design: mementor-lib
+
+### git/command.rs — Git command runner
+
+```rust
+/// Run a git command and return stdout as String (async).
+pub async fn git(args: &[&str]) -> Result<String>
+
+/// Run a git command in a specific directory (async).
+pub async fn git_in(dir: &Path, args: &[&str]) -> Result<String>
+```
+
+All git operations go through this single async runner. Uses
+`tokio::process::Command` for non-blocking I/O. Handles working directory,
+error mapping to `anyhow`, output capture.
+
+### git/worktree.rs — Project root detection
+
+Carried forward from existing `crates/mementor-lib/src/git.rs`:
+
+```rust
+pub enum ResolvedWorktree {
+    Primary(PathBuf),
+    Linked { primary: PathBuf, worktree: PathBuf },
+}
+
+pub fn resolve_worktree() -> Result<ResolvedWorktree>
+```
+
+### git/tree.rs — Read blobs from checkpoint branch
+
+```rust
+/// List all entries under a path on a branch.
+pub fn ls_tree(branch: &str, path: &str) -> Result<Vec<TreeEntry>>
+
+/// Read a blob from a branch as bytes.
+pub fn show_blob(branch: &str, path: &str) -> Result<Vec<u8>>
+
+/// Read a blob from a branch as String.
+pub fn show_blob_str(branch: &str, path: &str) -> Result<String>
+```
+
+### git/log.rs — Commit log with trailer extraction
+
+```rust
+pub struct CommitInfo {
+    pub hash: String,
+    pub short_hash: String,
+    pub subject: String,
+    pub author: String,
+    pub date: String,
+    pub checkpoint_id: Option<String>,  // From Entire-Checkpoint trailer
+}
+
+/// Get commit log for a branch, extracting Entire-Checkpoint trailers.
+pub fn log_with_checkpoints(branch: &str, limit: usize) -> Result<Vec<CommitInfo>>
+```
+
+### git/diff.rs — File diffs
+
+```rust
+pub struct FileDiff {
+    pub path: String,
+    pub status: FileStatus,  // Added, Modified, Deleted
+    pub additions: usize,
+    pub deletions: usize,
+    pub hunks: Vec<DiffHunk>,
+}
+
+/// Get diffs for a specific commit.
+pub fn diff_commit(hash: &str) -> Result<Vec<FileDiff>>
+```
+
+### git/branch.rs — Branch listing with filtering
+
+```rust
+/// List branches, excluding entire/* internal branches.
+pub fn list_branches() -> Result<Vec<String>>
+
+/// Get the current branch name.
+pub fn current_branch() -> Result<String>
+```
+
+### entire/checkpoint.rs — Load checkpoints
+
+```rust
+pub struct CheckpointMeta {
+    pub checkpoint_id: String,
+    pub strategy: String,
+    pub branch: String,
+    pub created_at: String,
+    pub files_touched: Vec<String>,
+    pub sessions: Vec<SessionMeta>,
+    pub token_usage: TokenUsage,
+    pub commit_hashes: Vec<String>,  // From git log trailers
+}
+
+pub struct SessionMeta {
+    pub session_id: String,
+    pub created_at: String,
+    pub agent: String,
+    pub token_usage: TokenUsage,
+    pub attribution: Attribution,
+    pub blob_path: String,  // Path on checkpoint branch to full.jsonl
+}
+
+pub struct TokenUsage {
+    pub input_tokens: u64,
+    pub cache_creation_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub output_tokens: u64,
+    pub api_call_count: u64,
+}
+
+pub struct Attribution {
+    pub agent_lines: u64,
+    pub human_added: u64,
+    pub human_modified: u64,
+    pub human_removed: u64,
+    pub agent_percentage: f64,
+}
+
+/// Enumerate all checkpoints from entire/checkpoints/v1 branch.
+pub fn list_checkpoints() -> Result<Vec<CheckpointMeta>>
+
+/// Load full checkpoint detail including session metadata.
+pub fn load_checkpoint(checkpoint_id: &str) -> Result<CheckpointMeta>
+```
+
+**Enumeration strategy**: `git ls-tree entire/checkpoints/v1` returns
+two-char shard directories. For each shard,
+`git ls-tree entire/checkpoints/v1/<shard>/` returns checkpoint directories.
+Read `metadata.json` from each.
+
+### entire/transcript.rs — Parse JSONL transcripts
+
+```rust
+pub enum MessageRole { User, Assistant }
+
+pub enum ContentBlock {
+    Text(String),
+    Thinking(String),
+    ToolUse { name: String, input: serde_json::Value },
+    ToolResult { tool_use_id: String, content: String },
+}
+
+pub struct TranscriptMessage {
+    pub role: MessageRole,
+    pub uuid: String,
+    pub timestamp: Option<String>,
+    pub content: Vec<ContentBlock>,
+}
+
+pub enum TranscriptEntry {
+    Message(TranscriptMessage),
+    FileHistorySnapshot { files: Vec<String> },
+    PrLink { pr_number: u64, pr_url: String, repository: String },
+    Progress(String),
+    Other(String),
+}
+
+/// Parse a JSONL transcript (from git blob bytes) into structured entries.
+pub fn parse_transcript(jsonl: &[u8]) -> Result<Vec<TranscriptEntry>>
+
+/// Group transcript into display segments for the TUI.
+pub fn group_into_segments(entries: &[TranscriptEntry]) -> Vec<ConversationSegment>
+```
+
+### entire/cli.rs — Wrap entire CLI
+
+```rust
+/// Run `entire explain --checkpoint <id> --short --no-pager`.
+pub fn explain_short(checkpoint_id: &str) -> Result<CheckpointSummary>
+
+/// Run `entire explain --checkpoint <id> --raw-transcript --no-pager`.
+pub fn raw_transcript(checkpoint_id: &str) -> Result<Vec<u8>>
+
+/// Run `entire rewind --list` and parse JSON output.
+pub fn rewind_list() -> Result<Vec<RewindPoint>>
+
+/// Run `entire status` and parse output.
+pub fn status() -> Result<EntireStatus>
+
+/// Find the live transcript file for an active session.
+pub fn find_live_transcript(session_id: &str) -> Result<Option<PathBuf>>
+
+/// Check if `entire` CLI is available.
+pub fn is_available() -> bool
+```
+
+### cache.rs — In-memory data cache
+
+```rust
+pub struct DataCache {
+    checkpoints: Vec<CheckpointMeta>,
+    commits: Vec<CommitInfo>,
+    transcripts: HashMap<String, Vec<TranscriptEntry>>,
+    diffs: HashMap<String, Vec<FileDiff>>,
+}
+
+impl DataCache {
+    /// Load checkpoint list and commit log on startup.
+    pub fn initialize(branch: &str) -> Result<Self>
+
+    /// Get transcript for a checkpoint (lazy load from git blob).
+    pub fn transcript(&mut self, checkpoint_id: &str) -> Result<&[TranscriptEntry]>
+
+    /// Get diffs for a commit (lazy load).
+    pub fn diffs(&mut self, commit_hash: &str) -> Result<&[FileDiff]>
+
+    /// Refresh checkpoint list and commit log.
+    pub fn refresh(&mut self) -> Result<()>
+}
+```
+
+## TODO
+
+- [ ] Implement `git/command.rs` — `git()`, `git_in()`
+- [ ] Move existing `git.rs` → `git/worktree.rs`
+- [ ] Implement `git/tree.rs` — `ls_tree()`, `show_blob()`, `show_blob_str()`
+- [ ] Implement `git/log.rs` — `log_with_checkpoints()`
+- [ ] Implement `git/diff.rs` — `diff_commit()`
+- [ ] Implement `git/branch.rs` — `list_branches()`, `current_branch()`
+- [ ] Implement `entire/checkpoint.rs` — `list_checkpoints()`,
+  `load_checkpoint()`
+- [ ] Implement `entire/transcript.rs` — `parse_transcript()`,
+  `group_into_segments()`
+- [ ] Implement `entire/cli.rs` — `explain_short()`, `raw_transcript()`,
+  `status()`, `find_live_transcript()`, `is_available()`
+- [ ] Implement `cache.rs` — `DataCache` with lazy loading
+- [ ] Define model types in `model/` (or inline in each module)
+- [ ] Unit tests for transcript parsing with fixture JSONL data
+- [ ] Unit tests for git log parsing with fixture output
+- [ ] Unit tests for checkpoint metadata parsing with fixture JSON
+```
+
+---
+
+## File 4: `history/2026-02-23_tui-plugin-pivot/03_tui-checkpoint-list.md`
+
+```markdown
+# Phase 2: TUI Shell + Checkpoint List
+
+Parent: [00_overview.md](00_overview.md)
+Depends on: [02_data-layer.md](02_data-layer.md)
+
+## Goal
+
+Minimal TUI — app.rs event loop, checkpoint list view, status bar. Running
+`mementor` launches the TUI and shows real checkpoints from the
+`entire/checkpoints/v1` branch.
+
+## app.rs — Application State Machine
+
+```rust
+pub enum View {
+    CheckpointList,
+    CheckpointDetail(String),    // checkpoint_id
+    Transcript(String),          // checkpoint_id
+    Diff(String),                // commit_hash
+    GitLog,
+    Search,
+}
+
+pub struct App {
+    view: View,
+    cache: DataCache,
+    checkpoint_list_state: ListState,
+    selected_branch: String,
+    search_query: String,
+    running: bool,
+}
+
+impl App {
+    pub fn run(&mut self, terminal: &mut Terminal) -> Result<()>
+    // Main event loop: poll → dispatch → render
+}
+```
+
+## ViewHandler Trait
+
+```rust
+pub trait ViewHandler {
+    fn render(&self, frame: &mut Frame, area: Rect, app: &App);
+    fn handle_key(&self, key: KeyEvent, app: &mut App) -> Option<View>;
+}
+```
+
+## views/dashboard.rs — Checkpoint List (Home)
+
+```
++--[ mementor ]--[ main v ]--[ Search: _______________ ]-----------+
+|                                                                   |
+|  redesign schema from 4-table to 11-table (#38)                   |
+|    c04a441  2h ago  Claude Code  +371/-226  3 files  28.5K tok   |
+|                                                                   |
+|> replace rusqlite_migration with snapshot-first (#36)             |
+|    6ad3cd7  5h ago  Claude Code  +189/-94   2 files  15.2K tok   |
+|                                                                   |
+|  add entire integration hooks and settings (#37)                  |
+|    9a83a41  5h ago  Claude Code  +45/-3     1 file   12.1K tok   |
+|                                                                   |
+|  switch embedding model to GTE multilingual int8 (#34)            |
+|    bed382d  1d ago  Claude Code  +512/-380  8 files  42.3K tok   |
+|                                                                   |
+|  add /simplify and /review custom skills (#35)                    |
+|    72f20ca  1d ago  Claude Code  +280/-12   6 files  18.7K tok   |
+|                                                                   |
++-------------------------------------------------------------------+
+| j/k Navigate  Enter Detail  b Branch  / Search  g Git log  q Quit|
++-------------------------------------------------------------------+
+```
+
+**Layout**: Full-width list. Each card is 2 lines:
+- Line 1: PR/commit title (bold)
+- Line 2: short hash, relative time, agent badge, +/-stats, file count,
+  token count
+
+**Key bindings**:
+
+| Key | Action |
+|-----|--------|
+| `j` / `k` / `↑` / `↓` | Move selection |
+| `Enter` | Open checkpoint detail |
+| `b` | Open branch selector popup (excludes `entire/*` branches) |
+| `/` | Focus search input |
+| `g` | Switch to git log view |
+| `r` | Refresh data |
+| `q` | Quit |
+
+## TODO
+
+- [ ] Implement `app.rs` — event loop, state machine, terminal setup/teardown
+- [ ] Implement `ViewHandler` trait
+- [ ] Implement `views/dashboard.rs` — checkpoint list rendering
+- [ ] Implement branch selector popup with `entire/*` filtering
+- [ ] Implement status bar with key binding hints
+- [ ] Wire `mementor` (no subcommand) to launch TUI in `mementor-main`
+- [ ] Verify TUI launches and shows real checkpoints
+```
+
+---
+
+## File 5: `history/2026-02-23_tui-plugin-pivot/04_detail-transcript-diff.md`
+
+```markdown
+# Phase 3: Detail View + Transcript + Diffs
+
+Parent: [00_overview.md](00_overview.md)
+Depends on: [03_tui-checkpoint-list.md](03_tui-checkpoint-list.md)
+
+## Goal
+
+Implement the checkpoint detail view, full transcript viewer, file diff view,
+and git log view with cross-view navigation.
+
+## views/detail.rs — Checkpoint Detail
+
+```
++--[ d5bd4941cf95: redesign schema from 4-table to 11-table ]-----------+
+|                                                                        |
++--[ Sessions ]-----+--[ Transcript ]-----------------------------------+
+|                    |                                                   |
+|  Claude Code       |  [User] heejoon.kang               2h ago       |
+|    3 steps, 28.5K  |  redesign schema from 4-table to 11-table        |
+|    "redesign the   |  architecture                                    |
+|     schema..."     |                                                   |
+|                    |  [Assistant]                          Claude Code |
++--------------------+  I'll start by reading the current schema and    |
+| Files           3  |  understanding the table structure. Let me       |
++--------------------+  examine the DDL files first.                    |
+|  M schema.sql      |                                                   |
+|  M schema.rs       |  [4 tools used] ────────────────────────────     |
+|  A 00002__.sql     |    Read   /crates/mementor-lib/ddl/schema.sql    |
+|                    |    Glob   crates/mementor-lib/src/db/*.rs         |
++--[ Commits ]-------+    Grep   "CREATE TABLE" --type sql              |
+|  c04a441 redesign  |    Bash   cargo clippy -- -D warnings            |
+|  727be48 update mi |                                                   |
+|                    |  [Assistant]                                       |
+|                    |  Here's my plan for the redesign. The current     |
+|                    |  4-table schema will be expanded to 11 tables...  |
++--------------------+---------------------------------------------------+
+| Tab Focus  t Transcript  d Diffs  c Commits  Esc Back  q Quit         |
++------------------------------------------------------------------------+
+```
+
+**Layout**: Three-panel with header:
+- Header: checkpoint ID + title
+- Left sidebar (25%): Sessions, Files (M/A/D badges), Commits
+- Right pane (75%): Scrollable transcript
+
+**Key bindings**:
+
+| Key | Action |
+|-----|--------|
+| `Tab` | Cycle focus: sessions → files → commits → transcript |
+| `j` / `k` | Scroll focused panel |
+| `t` | Fullscreen transcript view |
+| `d` | Fullscreen diffs view |
+| `s` | Generate AI summary via `claude -p` (if available) |
+| `c` | Focus commits panel |
+| `Enter` | Context-dependent: file→diff, commit→diff, tool→expand |
+| `Esc` | Back to checkpoint list |
+
+## views/transcript.rs — Full Transcript View
+
+```
++--[ Transcript: d5bd4941cf95 — redesign schema ]--+--[ Tools ]--------+
+|                                                   |                   |
+| [User] heejoon.kang            2026-02-22 08:30  | ▸ Read            |
+|                                                   | ▸ Glob            |
+| redesign schema from 4-table to 11-table          | ▸ Grep            |
+| architecture                                      | ▸ Bash            |
+|                                                   |                   |
+| [Assistant]                     Claude Code        |                   |
+|                                                   |                   |
+| I'll start by reading the current schema and      |                   |
+| understanding the table structure. Let me examine |                   |
+| the DDL files first.                              |                   |
+|                                                   |                   |
+| ┌─ Read ──────────────────────────────────────┐   |                   |
+| │ file_path: /crates/mementor-lib/ddl/        │   |                   |
+| │            schema.sql                        │   |                   |
+| │ Result: (286 lines)                          │   |                   |
+| │ CREATE TABLE sessions (                      │   |                   |
+| │     session_id TEXT PRIMARY KEY,             │   |                   |
+| │     ...                                      │   |                   |
+| └──────────────────────────────────────────────┘   |                   |
+|                                                   |                   |
+| Based on the current schema, here are the changes |                   |
+| needed...                                         |                   |
+|                                                   |                   |
++---------------------------------------------------+-------------------+
+| j/k Scroll  Enter Expand tool  / Search  o Toggle tools  Esc Back     |
++-----------------------------------------------------------------------+
+```
+
+**Layout**: Two-panel:
+- Left (75%): Scrollable conversation with inline tool calls
+- Right (25%): Tool call index (clickable, jump to tool)
+
+**Message rendering**:
+
+| Type | Style |
+|------|-------|
+| User message | Green header, plain text body |
+| Assistant message | Blue header, plain text body |
+| Thinking block | Dim gray, italic, collapsible |
+| Tool use | Bordered box: tool name + arguments + result preview |
+| Tool result | Indented under tool use, truncated with "..." |
+| Interruption | Yellow `[Request interrupted by user]` |
+| Summary | Magenta header (compaction boundary marker) |
+
+**Key bindings**:
+
+| Key | Action |
+|-----|--------|
+| `j` / `k` / `↑` / `↓` | Scroll line by line |
+| `Ctrl-d` / `Ctrl-u` | Scroll half page |
+| `g` / `G` | Jump to top / bottom |
+| `Enter` | Expand/collapse tool call under cursor |
+| `/` | Search within transcript |
+| `n` / `N` | Next / previous search match |
+| `o` | Toggle tool index sidebar |
+| `Esc` | Back to detail view |
+
+## views/diff.rs — File Diffs View
+
+```
++--[ Diffs: c04a441 redesign schema ]--[ 1/3: schema.sql ]------------+
+|                                                                       |
+| @@ -1,15 +1,42 @@                                                    |
+|   1    1  CREATE TABLE sessions (                                     |
+|   2    2      session_id TEXT PRIMARY KEY,                            |
+|   3    3      transcript_path TEXT NOT NULL,                          |
+|        4 +    project_dir TEXT NOT NULL,                              |
+|        5 +    started_at TEXT,                                        |
+|        6 +    last_compact_line_index INTEGER,                        |
+|   4    7      last_line_index INTEGER NOT NULL DEFAULT -1,            |
+|   5       -    project_dir TEXT NOT NULL                               |
+|   6    8  );                                                          |
+|                                                                       |
++-----------------------------------------------------------------------+
+| j/k Scroll  n/N Next/prev file  f File list  Esc Back  q Quit        |
++-----------------------------------------------------------------------+
+```
+
+Red/pink for deletions, green for additions, blue for hunk headers. Dual line
+numbers (old left, new right).
+
+| Key | Action |
+|-----|--------|
+| `j` / `k` | Scroll |
+| `n` / `N` | Next / previous file |
+| `f` | Open file picker popup |
+| `]` / `[` | Next / previous hunk |
+| `Esc` | Back |
+
+## views/git_log.rs — Git Log with Checkpoint Annotations
+
+```
++--[ Git Log: main ]---------------------------------------------------+
+|                                                                       |
+|  * c04a441  redesign schema from 4-table to 11-table (#38)           |
+|             2026-02-22 08:30  heejoon.kang  [d5bd4941cf95]           |
+|                                                                       |
+|  * 6ad3cd7  replace rusqlite_migration with snapshot (#36)            |
+|             2026-02-21 15:20  heejoon.kang                           |
+|                                                                       |
+|> * 9a83a41  add entire integration hooks and settings (#37)           |
+|             2026-02-21 14:45  heejoon.kang  [7f11f9dc0ce6]          |
+|                                                                       |
++-----------------------------------------------------------------------+
+| j/k Navigate  Enter Checkpoint detail  d Diff  Esc Back  q Quit      |
++-----------------------------------------------------------------------+
+```
+
+Checkpoint IDs shown as `[<id>]` badge. Enter on tagged commit navigates to
+checkpoint detail.
+
+## TODO
+
+- [ ] Implement `views/detail.rs` — three-panel layout, session/file/commit
+  panels
+- [ ] Implement Tab focus cycling between panels
+- [ ] Implement transcript rendering in detail right pane
+- [ ] Implement `views/transcript.rs` — fullscreen transcript
+- [ ] Implement message rendering (user, assistant, thinking, tool use)
+- [ ] Implement tool call expand/collapse
+- [ ] Implement tool index sidebar
+- [ ] Implement in-transcript search (`/`, `n`, `N`)
+- [ ] Implement `views/diff.rs` — unified diff display
+- [ ] Implement dual line numbers, color coding
+- [ ] Implement file navigation (`n`/`N`, file picker `f`)
+- [ ] Implement hunk navigation (`]`/`[`)
+- [ ] Implement `views/git_log.rs` — commit list with checkpoint badges
+- [ ] Implement cross-view navigation (detail→transcript, detail→diff, etc.)
+- [ ] Implement AI summary popup (`s` key, `claude -p` background call)
+```
+
+---
+
+## File 6: `history/2026-02-23_tui-plugin-pivot/05_search.md`
+
+```markdown
+# Phase 4: Search + Polish
+
+Parent: [00_overview.md](00_overview.md)
+Depends on: [04_detail-transcript-diff.md](04_detail-transcript-diff.md)
+
+## Goal
+
+Implement cross-transcript search overlay, file history filter, and branch
+filter.
+
+## views/search.rs — Cross-Transcript Search
+
+```
++--[ Search ]----------------------------------------------------------+
+| Query: authentication middleware_                                     |
++-----------------------------------------------------------------------+
+|                                                                       |
+|  [1] d5bd4941cf95 — redesign schema (2h ago)                         |
+|      "...JWT authentication middleware for the API..."                |
+|                                                                       |
+|  [2] 7f11f9dc0ce6 — add entire integration (5h ago)                  |
+|      "...authenticate with the entire.io service..."                  |
+|                                                                       |
+|  [3] bed382d — switch embedding model (1d ago)                        |
+|      "...no authentication needed for local model..."                 |
+|                                                                       |
++-----------------------------------------------------------------------+
+| Enter Open match  Tab Toggle scope (all/branch)  Esc Close            |
++-----------------------------------------------------------------------+
+```
+
+### Search Implementation
+
+No vector DB — search is done by:
+1. Load transcript for each checkpoint (lazy, cached)
+2. Case-insensitive substring search across all text entries
+3. Rank by recency (most recent first) or by match density
+4. Display matching line with surrounding context
+
+For large histories, search runs in a background thread to keep the UI
+responsive. Results stream in as checkpoints are scanned.
+
+### Key Bindings
+
+| Key | Action |
+|-----|--------|
+| `Enter` | Open matching checkpoint |
+| `Tab` | Toggle scope: all branches / current branch |
+| `j` / `k` | Navigate results |
+| `Esc` | Close search |
+
+## TODO
+
+- [ ] Implement `views/search.rs` — search overlay UI
+- [ ] Implement background search thread with streaming results
+- [ ] Implement result ranking (recency + match density)
+- [ ] Implement scope toggle (all / current branch)
+- [ ] Implement search from checkpoint list (`/` key)
+- [ ] Implement file history filter ("which sessions touched this file?")
+- [ ] Polish: loading indicators, empty states, error messages
+```
+
+---
+
+## File 7: `history/2026-02-23_tui-plugin-pivot/06_cli-subcommands.md`
+
+```markdown
+# Phase 5: CLI Subcommands
+
+Parent: [00_overview.md](00_overview.md)
+Depends on: [02_data-layer.md](02_data-layer.md)
+
+## Goal
+
+Implement JSON CLI subcommands for scripting and plugin use. All subcommands
+output JSON for machine consumption.
+
+## Commands
+
+```
+mementor                           # Launch TUI (default)
+mementor list [--branch <name>]    # List checkpoints as JSON
+mementor show <checkpoint-id>      # Checkpoint detail as JSON
+mementor transcript <checkpoint-id> # Parsed transcript as JSON
+mementor commits [--branch <name>]  # Commits with checkpoint links as JSON
+mementor files <checkpoint-id>      # Files touched as JSON
+mementor search <query>            # Search across transcripts (JSON results)
+mementor status                    # Active sessions + entire status as JSON
+mementor summarize <checkpoint-id>  # AI summary via claude -p
+```
+
+## Output Examples
+
+### `mementor list`
+
+```json
+{
+  "checkpoints": [
+    {
+      "checkpoint_id": "d5bd4941cf95",
+      "branch": "main",
+      "strategy": "manual-commit",
+      "created_at": "2026-02-22T08:30:35Z",
+      "sessions": [
+        {
+          "session_id": "95aa5bff-1ac3-4153-9d42-08d5e7a3b1c2",
+          "agent": "Claude Code",
+          "created_at": "2026-02-22T08:20:00Z"
+        }
+      ],
+      "files_touched": [
+        "crates/mementor-lib/ddl/schema.sql",
+        "crates/mementor-lib/ddl/migrations/00002__schema_redesign.sql",
+        "crates/mementor-lib/src/db/schema.rs"
+      ],
+      "token_usage": {
+        "input_tokens": 25430000,
+        "output_tokens": 3087000,
+        "cache_read_tokens": 18200000,
+        "cache_creation_tokens": 1500000,
+        "api_call_count": 276
+      },
+      "commits": [
+        {
+          "hash": "c04a441",
+          "subject": "redesign schema from 4-table to 11-table architecture (#38)"
+        }
+      ],
+      "stats": {
+        "additions": 371,
+        "deletions": 226,
+        "file_count": 3
+      }
+    }
+  ],
+  "total": 1
+}
+```
+
+### `mementor show <checkpoint-id>`
+
+```json
+{
+  "checkpoint_id": "d5bd4941cf95",
+  "branch": "main",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-22T08:30:35Z",
+  "sessions": [
+    {
+      "session_id": "95aa5bff-1ac3-4153-9d42-08d5e7a3b1c2",
+      "agent": "Claude Code",
+      "created_at": "2026-02-22T08:20:00Z",
+      "token_usage": {
+        "input_tokens": 25430000,
+        "output_tokens": 3087000,
+        "cache_read_tokens": 18200000,
+        "cache_creation_tokens": 1500000,
+        "api_call_count": 276
+      },
+      "attribution": {
+        "agent_lines": 597,
+        "human_added": 0,
+        "human_modified": 0,
+        "human_removed": 0,
+        "agent_percentage": 100.0
+      }
+    }
+  ],
+  "files_touched": ["crates/mementor-lib/ddl/schema.sql"],
+  "commits": [
+    {
+      "hash": "c04a441f8e2b3d1a9c7f6e5d4b3a2c1d0e9f8a7b",
+      "short_hash": "c04a441",
+      "subject": "redesign schema from 4-table to 11-table architecture (#38)",
+      "author": "heejoon.kang",
+      "date": "2026-02-22T09:15:00Z"
+    }
+  ]
+}
+```
+
+### `mementor transcript <checkpoint-id>`
+
+```json
+{
+  "checkpoint_id": "d5bd4941cf95",
+  "session_id": "95aa5bff-1ac3-4153-9d42-08d5e7a3b1c2",
+  "segments": [
+    {
+      "index": 0,
+      "user": {
+        "timestamp": "2026-02-22T08:20:12Z",
+        "content": "redesign schema from 4-table to 11-table architecture"
+      },
+      "assistant": {
+        "timestamp": "2026-02-22T08:20:18Z",
+        "content": "I'll start by reading the current schema...",
+        "thinking": "The user wants to redesign the schema..."
+      },
+      "tools": [
+        {
+          "name": "Read",
+          "input": {"file_path": "/crates/mementor-lib/ddl/schema.sql"},
+          "result_preview": "CREATE TABLE sessions (\n..."
+        }
+      ]
+    }
+  ],
+  "total_segments": 1,
+  "entry_counts": {
+    "user": 1,
+    "assistant": 1,
+    "tool_use": 1,
+    "tool_result": 1,
+    "thinking": 1,
+    "file_history_snapshot": 0,
+    "progress": 12,
+    "other": 0
+  }
+}
+```
+
+### `mementor commits [--branch <name>]`
+
+```json
+{
+  "commits": [
+    {
+      "hash": "c04a441f8e2b",
+      "short_hash": "c04a441",
+      "subject": "redesign schema from 4-table to 11-table architecture (#38)",
+      "author": "heejoon.kang",
+      "date": "2026-02-22T09:15:00Z",
+      "checkpoint_id": "d5bd4941cf95"
+    },
+    {
+      "hash": "6ad3cd7b1a2c",
+      "short_hash": "6ad3cd7",
+      "subject": "replace rusqlite_migration with snapshot-first (#36)",
+      "author": "heejoon.kang",
+      "date": "2026-02-21T16:30:00Z",
+      "checkpoint_id": null
+    }
+  ],
+  "branch": "main",
+  "total": 2
+}
+```
+
+### `mementor files <checkpoint-id>`
+
+```json
+{
+  "checkpoint_id": "d5bd4941cf95",
+  "files": [
+    {
+      "path": "crates/mementor-lib/ddl/schema.sql",
+      "status": "modified",
+      "additions": 185,
+      "deletions": 42
+    }
+  ],
+  "total": 1,
+  "stats": {"additions": 185, "deletions": 42}
+}
+```
+
+### `mementor search <query>`
+
+```json
+{
+  "query": "schema redesign",
+  "results": [
+    {
+      "checkpoint_id": "d5bd4941cf95",
+      "branch": "main",
+      "created_at": "2026-02-22T08:30:35Z",
+      "session_id": "95aa5bff-1ac3-4153-9d42-08d5e7a3b1c2",
+      "match": {
+        "segment_index": 0,
+        "role": "user",
+        "text": "redesign schema from 4-table to 11-table architecture",
+        "context_before": null,
+        "context_after": "I'll start by reading the current schema..."
+      }
+    }
+  ],
+  "total_matches": 1,
+  "checkpoints_searched": 2
+}
+```
+
+### `mementor status`
+
+```json
+{
+  "entire_enabled": true,
+  "strategy": "manual-commit",
+  "active_sessions": [
+    {
+      "session_id": "7af898b1-b6d2-45a8-a18a-24fa94506cf3",
+      "short_id": "7af898b",
+      "working_dir": "/Users/heejoon.kang/dev/git/fenv-org/mementor-agent1",
+      "branch": "agent1",
+      "agent": "Claude Code",
+      "started": "1d ago",
+      "last_active": "1h ago",
+      "first_prompt": "what's the next phase in @history/..."
+    }
+  ],
+  "checkpoint_count": 2,
+  "latest_checkpoint": "d5bd4941cf95"
+}
+```
+
+## Clap Structure
+
+```rust
+#[derive(Parser)]
+#[command(name = "mementor")]
+enum Cli {
+    /// List checkpoints
+    List {
+        #[arg(long, default_value = "HEAD")]
+        branch: String,
+    },
+    /// Show checkpoint detail
+    Show {
+        checkpoint_id: String,
+    },
+    /// Dump parsed transcript
+    Transcript {
+        checkpoint_id: String,
+    },
+    /// List commits with checkpoint links
+    Commits {
+        #[arg(long, default_value = "HEAD")]
+        branch: String,
+        #[arg(long, default_value = "100")]
+        limit: usize,
+    },
+    /// List files touched by a checkpoint
+    Files {
+        checkpoint_id: String,
+    },
+    /// Search across transcripts
+    Search {
+        query: String,
+        #[arg(long)]
+        branch: Option<String>,
+        #[arg(long, default_value = "10")]
+        limit: usize,
+    },
+    /// Show active sessions and entire status
+    Status,
+    /// Generate AI summary via claude -p
+    Summarize {
+        checkpoint_id: String,
+        #[arg(long)]
+        prompt: Option<String>,
+    },
+}
+// No subcommand → launch TUI
+```
+
+## TODO
+
+- [ ] Add Clap definitions for all subcommands
+- [ ] Implement `mementor list` handler
+- [ ] Implement `mementor show` handler
+- [ ] Implement `mementor transcript` handler
+- [ ] Implement `mementor commits` handler
+- [ ] Implement `mementor files` handler
+- [ ] Implement `mementor search` handler
+- [ ] Implement `mementor status` handler
+- [ ] Implement `mementor summarize` handler (shell out to `claude -p`)
+- [ ] Wire "no subcommand" to launch TUI
+- [ ] Integration tests for each subcommand
+```
+
+---
+
+## File 8: `history/2026-02-23_tui-plugin-pivot/07_plugin.md`
+
+```markdown
+# Phase 6: Plugin Files
+
+Parent: [00_overview.md](00_overview.md)
+Depends on: [06_cli-subcommands.md](06_cli-subcommands.md)
+
+## Goal
+
+Create the Claude Code plugin: plugin.json, skills, and agents.
+
+## Plugin Structure
+
+```
+.claude-plugin/
+  plugin.json
+skills/
+  recall/SKILL.md
+  explain-session/SKILL.md
+agents/
+  knowledge-miner.md
+```
+
+Plugin files live at repo root.
+
+## plugin.json
+
+```json
+{
+  "name": "mementor",
+  "version": "2.0.0",
+  "description": "TUI workspace tool and knowledge-mining skills for Claude Code. Provides /recall for cross-session knowledge search and /explain-session for checkpoint deep-dives.",
+  "author": "fenv-org",
+  "repository": "https://github.com/fenv-org/mementor"
+}
+```
+
+## /recall Skill
+
+```yaml
+---
+name: recall
+description: >
+  Search past coding sessions for relevant knowledge and context.
+  Use when you need to recall what was done before, find related
+  past work, or understand the history behind code changes.
+disable-model-invocation: false
+user-invocable: true
+argument-hint: "<what to search for>"
+context: fork
+agent: knowledge-miner
+allowed-tools: Bash(mementor *), Bash(entire *), Bash(git log *), Read, Glob, Grep
+---
+```
+
+**`context: fork`** runs the skill in a separate subagent context using the
+`knowledge-miner` agent:
+- knowledge-miner handles search autonomously
+- Results returned as summary to main agent
+- Main agent's context window NOT consumed by transcript data
+
+**Search strategy** (skill body):
+
+1. **Check active sessions first**: Run `entire status`. If current session
+   compacted, search live transcript for lost context.
+2. **Quick metadata scan**: `mementor list` for all checkpoints.
+3. **Identify candidates**: Filter by files_touched, branch, time, keywords.
+4. **Deep read**: For top 3 candidates, `mementor transcript <id>`.
+5. **Synthesize**: Key decisions, code patterns, source checkpoints.
+6. **If `entire` available**: `entire explain --checkpoint <id> --short`.
+
+## /explain-session Skill
+
+```yaml
+---
+name: explain-session
+description: >
+  Explain what happened in a specific coding session, commit, or
+  checkpoint.
+disable-model-invocation: false
+user-invocable: true
+argument-hint: "<session-id, commit-hash, or checkpoint-id>"
+allowed-tools: Bash(mementor *), Bash(entire *), Bash(git *)
+---
+```
+
+**Body**:
+1. Determine input type (UUID / commit hash / 12-char checkpoint ID)
+2. For commits: `entire explain --commit <sha> --no-pager`
+3. For checkpoints: `mementor show <id>` + `mementor transcript <id>`
+4. For session IDs: search checkpoints for matching session
+5. Present: what was done, why, key decisions, files changed, outcomes
+
+## knowledge-miner Agent
+
+```yaml
+---
+name: knowledge-miner
+description: >
+  Autonomous researcher that searches through past coding session
+  history across multiple dimensions.
+tools: Bash, Read, Glob, Grep
+model: inherit
+maxTurns: 15
+---
+```
+
+**`model: inherit`** uses parent agent's model selection.
+
+**Research strategy**:
+
+1. **Analyze question** — topics, file paths, terms, time refs, PR numbers
+2. **Multi-angle investigation** (3+ angles):
+   - `mementor list` → filter by files_touched, branch, time
+   - `mementor search "<terms>"` → keyword search
+   - `entire explain --checkpoint <id> --short` → AI summaries
+   - `git log --oneline --grep="<term>"` → commit message search
+   - `mementor files <id>` → file-level investigation
+3. **Deep dive**: `mementor transcript <id>`, `entire explain --checkpoint <id>`
+4. **Cross-reference**: Trace pattern evolution across sessions
+5. **Return**: Key results, source checkpoints, timeline, confidence
+
+## TODO
+
+- [ ] Create `.claude-plugin/plugin.json`
+- [ ] Write `skills/recall/SKILL.md` with search strategy body
+- [ ] Write `skills/explain-session/SKILL.md`
+- [ ] Write `agents/knowledge-miner.md` with research strategy
+- [ ] Test skills work with `claude -p` or manual invocation
+```
+
+---
+
+## File 9: `history/2026-02-23_tui-plugin-pivot/08_cleanup-docs.md`
+
+```markdown
+# Phase 7: Cleanup + Docs
+
+Parent: [00_overview.md](00_overview.md)
+Depends on: [07_plugin.md](07_plugin.md)
+
+## Goal
+
+Deprecate old hooks, update project documentation.
+
+## TODO
+
+- [ ] Remove old hook configurations from `.claude/settings.json`
+- [ ] Update `CLAUDE.md` to reflect new architecture:
+  - Remove SQLite/embedding/vector search references
+  - Update crate descriptions (mementor-tui replaces mementor-cli)
+  - Remove build.rs, DDL, migration references
+  - Update dependency list
+  - Add TUI and plugin instructions
+- [ ] Update `README.md`:
+  - New project description (TUI + plugin)
+  - Installation instructions
+  - Usage examples (TUI, CLI subcommands, plugin)
+- [ ] Update history documents with final status
+```
+
+---
+
+## README.md (Full Rewrite)
+
+```markdown
+# Mementor
+
+**TUI Workspace Tool + Knowledge Mining Plugin for Claude Code**
+
+## Vision
+
+Mementor is a terminal workspace for browsing and searching your AI coding
+session history. It reads [Entire CLI](https://github.com/entireio/cli)
+checkpoint data from your local git repository and provides a rich TUI for
+navigating transcripts, diffs, and session metadata — plus a Claude Code
+plugin for AI-powered knowledge mining across sessions.
+
+No databases. No embedding models. No cloud services. Everything reads from
+your local git branch.
+
+## Features
+
+### TUI (Terminal User Interface)
+
+- **Checkpoint browser** — Navigate your coding session history with vim-style
+  key bindings. See commit titles, agent badges, file stats, and token usage
+  at a glance.
+- **Session detail view** — Three-panel layout: sessions, file tree, and
+  scrollable transcript with inline tool call expansion.
+- **Transcript viewer** — Full-screen conversation display with syntax-
+  highlighted tool calls, thinking blocks, and compaction boundary markers.
+- **Unified diff viewer** — Browse file diffs with dual line numbers, color-
+  coded additions/deletions, and hunk navigation.
+- **Git log integration** — Commit history annotated with checkpoint IDs.
+  Jump from any tagged commit directly to its session transcript.
+- **Cross-transcript search** — Search across all sessions with real-time
+  results streaming. Filter by branch, file, or time range.
+- **AI session summaries** — Generate on-demand summaries via `claude -p`
+  with custom prompts. Goes beyond entire's fixed `--generate` output.
+- **Branch filtering** — Clean branch selector that hides entire's internal
+  branches (`entire/checkpoints/*`, shadow branches).
+- **Keyboard-driven** — Vim-style navigation throughout: `j`/`k`, `g`/`G`,
+  `Ctrl-d`/`Ctrl-u`, `/` search, `Tab` focus cycling.
+- **Offline** — No network required. Reads from local git branch only.
+- **Fast startup** — Rust binary, target <200ms to interactive.
+
+### Claude Code Plugin
+
+- **/recall** — Search past sessions for relevant knowledge and context.
+  Runs autonomously via the knowledge-miner agent in a forked context.
+- **/explain-session** — Deep-dive into a specific session, commit, or
+  checkpoint with full conversation, decisions, and outcomes.
+- **knowledge-miner agent** — Autonomous researcher that investigates session
+  history from multiple angles: metadata, transcripts, commits, file access
+  patterns.
+- **Active session recovery** — Search compacted context in live sessions via
+  `entire status` + live transcript file scanning.
+
+### CLI Subcommands
+
+All subcommands output JSON for scripting and plugin use:
+
+```bash
+mementor                            # Launch TUI (default)
+mementor list [--branch <name>]     # List checkpoints
+mementor show <checkpoint-id>       # Checkpoint detail
+mementor transcript <checkpoint-id> # Parsed transcript
+mementor commits [--branch <name>]  # Commits with checkpoint links
+mementor files <checkpoint-id>      # Files touched
+mementor search <query>             # Cross-transcript search
+mementor status                     # Active sessions + entire status
+mementor summarize <checkpoint-id>  # AI summary via claude -p
+```
+
+## Tech Stack
+
+| Component       | Choice                                      |
+| --------------- | ------------------------------------------- |
+| Language        | Rust (edition 2024)                         |
+| TUI framework   | ratatui + crossterm                         |
+| Async runtime   | tokio                                       |
+| Data source     | Entire CLI checkpoints (git branch)         |
+| CLI             | clap                                        |
+| Time            | jiff                                        |
+| Error handling  | anyhow                                      |
+| Serialization   | serde + serde_json                          |
+
+## Prerequisites
+
+- [Entire CLI](https://github.com/entireio/cli) installed and configured
+- Rust 1.93.1+ (managed via [mise](https://mise.jdx.dev/))
+- For AI summaries: `claude` CLI installed and authenticated
+
+## Install
+
+```bash
+cargo build --release
+```
+
+The binary is produced at `target/release/mementor`.
+
+## Quick Start
+
+1. **Ensure Entire CLI is set up** in your project (see
+   [entire docs](https://entire.io/docs)).
+
+2. **Launch the TUI**:
+
+   ```bash
+   mementor
+   ```
+
+3. **Browse your history**: Use `j`/`k` to navigate checkpoints, `Enter` to
+   view details, `t` for full transcript, `d` for diffs, `/` to search.
+
+4. **Install the plugin** for AI-powered search:
+
+   The plugin provides `/recall` and `/explain-session` skills plus a
+   `knowledge-miner` agent that can autonomously investigate session history.
+
+## Architecture
+
+### Data Flow
+
+```
+entire/checkpoints/v1 (git branch)
+  └─ metadata.json + full.jsonl per checkpoint
+      │
+      ├─ mementor-lib (async data layer)
+      │   ├─ git/ — shell out to git for branch/tree/log/diff ops
+      │   ├─ entire/ — checkpoint loading, transcript parsing, CLI wrapper
+      │   └─ cache — in-memory LRU cache for transcripts + diffs
+      │
+      ├─ mementor-tui (terminal UI)
+      │   ├─ app.rs — tokio event loop + state machine
+      │   └─ views/ — dashboard, detail, transcript, diff, git log, search
+      │
+      └─ CLI subcommands — JSON output for plugin/scripting
+```
+
+### Crate Structure
+
+```
+crates/
+  mementor-lib/    Data access: git ops, checkpoint loading, transcript
+                   parsing, entire CLI wrapper, in-memory cache
+  mementor-tui/    TUI: ratatui views, event loop, widgets
+  mementor-main/   Thin binary entry point
+```
+
+## Development
+
+### Setup
+
+```bash
+mise install
+cargo build
+```
+
+### Testing
+
+```bash
+mise run test              # all tests (unit + integration)
+mise run test:unit         # unit tests only
+```
+
+### Linting
+
+```bash
+cargo clippy -- -D warnings
+```
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).
+
+## Acknowledgments
+
+Built on top of [Entire CLI](https://github.com/entireio/cli), which captures
+full AI agent session data on every git commit. Mementor provides the terminal
+interface and AI-powered search layer that entire doesn't have — cross-
+transcript search, keyboard-driven navigation, AI summaries, and active session
+context recovery.
+```
+
+---
+
+## Updates to Existing Documents
+
+### `history/2026-02-20_active-agent-pivot.md`
+
+Append at the end:
+
+```markdown
+
+## Deprecation Notice
+
+**This document and its child phases (3-5) are deprecated.** The active
+agent-driven search approach with local SQLite + embedding pipeline has been
+superseded by:
+
+**[Mementor v2: TUI Workspace Tool + Knowledge Mining Plugin](2026-02-23_tui-plugin-pivot/00_overview.md)**
+
+The new approach eliminates the local database entirely and builds on
+entire-cli's checkpoint data instead. See the linked document for details.
+```
+
+### `history/2026-02-20_extended-data-collection.md`
+
+Replace all `- [ ]` with `- [x] ~~DEPRECATED~~` in the TODO section.
+
+### `history/2026-02-20_cli-subcommands.md`
+
+Replace all `- [ ]` with `- [x] ~~DEPRECATED~~` in the TODO section.
+
+### `history/2026-02-20_plugin.md`
+
+Replace all `- [ ]` with `- [x] ~~DEPRECATED~~` in the TODO section.
+
+## Verification
+
+- All 9 documents exist under `history/2026-02-23_tui-plugin-pivot/`
+- Each phase doc has a TODO section with checkboxes
+- Old Phase 3-5 docs have deprecated TODOs
+- `active-agent-pivot.md` has deprecation note
+- `cargo check` still passes (no code changes)
+
+
+If you need specific details from before exiting plan mode (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/heejoon.kang/.REDACTED.jsonl
+
+---
+
+Base directory for this skill: /Users/heejoon.kang/dev/git/fenv-org/mementor-agent1/.claude/skills/commit
+
+# Commit Skill
+
+Perform a commit following the project's conventions. Execute the steps below in order.
+
+## 1. Pre-commit checks
+
+1. Run `cargo fmt --check`.
+   - If it fails, run `cargo fmt` automatically and include the formatted files in staging.
+2. Run `cargo clippy -- -D warnings`.
+   - If there are warnings, abort the commit and notify the user of the issues.
+
+## 2. Analyze changes
+
+Run the following commands in parallel to understand the current state:
+
+- `git status` — check untracked files (never use the `-uall` flag)
+- `git diff` — review the actual diff content of both staged and unstaged changes
+- `git log --oneline -5` — reference recent commit style
+
+## 3. Identify topics
+
+Read through the full diff output carefully and determine whether the changes span a single logical topic or multiple distinct topics.
+
+- **Single topic**: All changes relate to one coherent purpose (e.g., "add user authentication", "fix pagination bug"). Proceed directly to step 4.
+- **Multiple topics**: Changes cover more than one logical purpose (e.g., a bug fix mixed with a refactor, or a new feature alongside unrelated formatting changes). In this case:
+  1. Propose how to group the files into separate commits, explaining which files belong to which topic and why.
+  2. Use `AskUserQuestion` to present the proposed groupings and get explicit user approval before proceeding.
+  3. After approval, execute steps 4 and 5 once per approved group, in the order the user confirmed.
+
+## 4. Write the commit message
+
+Follow these rules strictly:
+
+- Language: English
+- Style: lowercase imperative mood (first character is also lowercase)
+- First line: 50 characters or fewer, focus on "what" changed
+- Only when truly necessary, add a detailed body after a blank line to explain "why"
+- Never add Co-Authored-By, attribution, or similar trailers
+
+## 5. Execute the commit
+
+1. Selectively `git add` only the relevant files for the current topic.
+   - Never include `.env`, credentials, or secret files.
+   - Never use `git add -A` or `git add .`.
+2. Pass the commit message using HEREDOC format:
+   ```bash
+   git commit -m "$(cat <<'EOF'
+   commit message here
+   EOF
+   )"
+   ```
+3. Run `git status` after the commit to verify the result.
+
+---
+
+<bash-input>git log</bash-input>
+
+---
+
+<bash-stdout>commit 5818f494ef609eb77c81ea0fcadc7f70ce43bae6
+Author: Kang Heejoon <haseo.hackers@gmail.com>
+Date:   Tue Feb 24 18:03:22 2026 +0900
+
+    add TUI + plugin pivot design documents and deprecate phases 3-5
+    
+    Pivot mementor from local RAG memory agent to TUI workspace tool +
+    Claude Code knowledge mining plugin built on entire-cli checkpoint
+    data. Adds 9 phased design docs, rewrites README, and marks old
+    phase 3-5 TODOs as deprecated.
+
+commit c04a44167f65b061991ab606bd037e5e293e090b
+Author: Heejoon Kang <haseo.hackers@gmail.com>
+Date:   Sun Feb 22 17:41:29 2026 +0900
+
+    redesign schema from 4-table to 11-table architecture (#38)
+    
+    * redesign schema from 4-table to 11-table architecture
+    
+    Phase 2 of the active agent pivot: replace the 4-table schema (sessions,
+    memories, file_mentions, pr_links) with an 11-table normalized schema
+    featuring first-class entries, turns, and chunks.
+    
+    Key changes:
+    - V2 migration drops all V1 tables and creates 10 regular tables + 1 FTS5
+      virtual table with trigram tokenizer and content-sync triggers
+    - Cascading deletes via ON DELETE CASCADE + PRAGMA foreign_keys = ON
+    - Per-turn transactions in the ingest pipeline (embedding outside tx)
+    - Remove passive recall: delete prompt, pre_tool_use, subagent_start hooks
+      and query command; only Stop and PreCompact hooks remain
+    - Schema generator filters FTS5 shadow tables from snapshot dump
+    
+    * simplify ingest pipeline and queries
+    
+    - Use RETURNING clause in upsert_turn to eliminate separate SELECT
+    - Replace magic number +2 with turn.end_line + 1
+    - Flatten if-let nesting in empty-turns branch with map_or
+    - Remove redundant has_tool_summary boolean
+    - Remove intermediate total_files variable
+    - Use named variables in info! format string
+    - Remove redundant turn_index from debug logging
+    - Replace unwrap_or with unwrap for guaranteed non-empty messages
+    
+    * update phase 2 history doc with simplification items
+    
+    * fix code review findings
+    
+    Fix provisional turn leak in empty-turns early
+    return, remove dead delete_entries_from, strengthen
+    test assertions to full struct comparison.
+    
+    * revert provisional turn leak fix
+    
+    The turns.is_empty() path with an existing provisional
+    turn is unreachable — transcripts are append-only, so
+    the original user+assistant pair is always present on
+    re-read.
+    
+    * remove stale V1 mementor hooks from settings
+    
+    PreToolUse, SubagentStart, and UserPromptSubmit hooks
+    were removed in the schema redesign.
+
+commit 6ad3cd773c66000386ceb8e53b30fcb45c68d9dd
+Author: Heejoon Kang <haseo.hackers@gmail.com>
+Date:   Sat Feb 21 15:28:39 2026 +0900
+
+    replace rusqlite_migration with snapshot-first schema management (#36)
+    
+    * replace rusqlite_migration with snapshot-first schema management
+    
+    Remove the rusqlite_migration dependency and replace it with a simpler
+    approach: include_str! from .sql files + SQLite user_version pragma.
+    
+    - Fresh databases execute schema.sql directly (no step-by-step migrations)
+    - Existing databases run incremental migration files
+    - Add mementor-schema-gen crate to generate and validate schema.sql
+    - Add migration test patterns to docs/testing-patterns.md
+    - Zero DDL duplication in production code or tests
+    
+    * simplify queries, ingest, and embedder code
+    
+    - replace custom OptionalExt with rusqlite::OptionalExtension
+    - fix upsert_session to persist last_compact_line_index
+    - extract format_memories() to deduplicate search formatting
+    - simplify embed_batch closure to method reference
+    
+    * fix code review findings
+    
+    - derive PartialEq on Session for full struct assertions
+    - re-add rusqlite via cargo add in mementor-schema-gen
+    - fix incorrect index count comment in schema_snapshot
+    - restore rank field in search_context debug logging
+    - rename placeholder migration filename in testing-patterns
+
+commit 9a83a416f7e9fdef8f17208ea9a182b7604ae894
+Author: Heejoon Kang <haseo.hackers@gmail.com>
+Date:   Sat Feb 21 14:29:25 2026 +0900
+
+    add entire integration hooks and settings (#37)
+    
+    Entire-Checkpoint: 7f11f9dc0ce6
+
+commit bed382d988ae111b4b1f3ef0c20b6cde45507311
+Author: Heejoon Kang <haseo.hackers@gmail.com>
+Date:   Fri Feb 20 23:11:09 2026 +0900
+
+    switch embedding model to GTE multilingual int8 (#34)
+    
+    * add embedding model PoC comparing e5 and GTE
+    
+    Evaluate 4 model variants (e5-small f32, e5-base f32, GTE multilingual
+    f32, GTE multilingual int8) with realistic turn-format test corpus
+    (8 passages, 8 queries, mixed EN/KO). GTE multilingual int8 chosen for
+    superior separation (0.23 vs 0.07), smallest model file (~340MB), and
+    no asymmetric prefix requirement.
+    
+    * switch embedding model to GTE multilingual int8
+    
+    Replace bundled BGE-small-en-v1.5 (384d) with disk-based GTE
+    multilingual base int8 (768d) for cross-language retrieval.
+    
+    - Rewrite Embedder for UserDefinedEmbeddingModel from disk
+    - Add model_cache_dir to MementorContext (~/.mementor/models/)
+    - Remove load_tokenizer(); use embedder.tokenizer() instead
+    - Add v5 DB migration (clear all data for dimension change)
+    - Add `mementor model download` CLI command
+    - Update all call sites, tests, and distance thresholds
+    
+    * remove BGE model, PoC crate, and update docs
+    
+    Remove bundled bge-small-en-v1.5 model files, PoC embedding
+    crate, and download-model.sh script. Update CLAUDE.md, mise.toml,
+    and history doc to reflect GTE multilingual base int8 model.
+    
+    * consolidate model constants and test helpers
+    
+    Move duplicated MODEL_SUBDIR and model file name constants to
+    config.rs. Consolidate 4 copies of model_dir() test helper into
+    mementor-test-util. Add Embedder::load_tokenizer() for lightweight
+    chunker tests. Add model download integration tests.
+    
+    * address code review findings
+    
+    - rewrite force-download test to be deterministic
+    - use full assert_eq in model_cache_dir test
+    - clarify "no external API" constraint for model download
+    - make MementorContext constructors return Result
+    
+    * fix CI model cache path for GTE switch
+    
+    The CI workflow still referenced the old BGE model path
+    (models/bge-small-en-v1.5/) while the codebase now expects
+    ~/.mementor/models/gte-multilingual-base/. Also moved the
+    download step after ONNX Runtime setup since it needs cargo.
+    
+    * fix model:download task package name
+    
+    The package name is `mementor`, not `mementor-main` (the
+    directory name). This caused `cargo run -p mementor-main`
+    to fail in CI with "package not found in workspace".
+
+commit 72f20ca45cf2f2ea62694636c0c61f667e001b5a
+Author: Heejoon Kang <haseo.hackers@gmail.com>
+Date:   Fri Feb 20 22:19:30 2026 +0900
+
+    add /simplify and /review custom skills (#35)
+
+commit 06526954b18d074d17a0577cfc748d2acf71ebed
+Author: Heejoon Kang <haseo.hackers@gmail.com>
+Date:   Fri Feb 20 18:16:06 2026 +0900
+
+    add active agent pivot design documents (#33)
+    
+    * add active agent pivot design documents
+    
+    6 design docs for pivoting mementor from passive hook-based recall
+    to active agent-driven search via CLI subcommands + Claude Code plugin:
+    - parent overview with architecture, code removal, worktree strategy
+    - phase 1: embedding model switch (BGE → multilingual-e5-base 768d)
+    - phase 2: schema redesign (12-table, FTS5, 3-layer architecture)
+    - phase 3: extended data collection (subagents, centroids, PR links)
+    - phase 4: CLI subcommands (11 commands with pagination)
+    - phase 5: plugin (marketplace, 5 skills, memory-researcher agent)
+    
+    * add find-by-pr command, remove sessions list --pr
+    
+    Dedicated find-by-pr <number> replaces --pr flag on sessions list
+    for consistency with find-by-file and find-by-commit pattern.
+    
+    * add sessions get, compaction segments, counts
+    
+    - sessions get <id>: detailed single-session metadata
+    - turns get --segment N / --current: compaction-aware
+    - sessions list: add compaction_count field
+    - update command count 12 → 14
+    
+    * rewrite README for active agent-driven search
+    
+    * add GTE and quantization PoC to Phase 1
+    
+    Evaluate GTE multilingual base (8K context) vs e5-base,
+    and f32 vs int8 quantization before finalizing model choice.
+
+commit c2968175f667a054144d38b633aad4b587265533
+Author: Heejoon Kang <haseo.hackers@gmail.com>
+Date:   Fri Feb 20 00:41:13 2026 +0900
+
+    add PR link storage and compaction summary role (#32)
+    
+    * add PR link storage and compaction summary role
+    
+    Store pr-link transcript entries in a dedicated pr_links table (v4
+    migration) and detect compaction summary messages to store with role
+    "compaction_summary" instead of "turn". PR link insertion is idempotent
+    via INSERT OR IGNORE. Session creation is moved before the turns-empty
+    check so PR-link-only transcripts are handled correctly.
+    
+    * move transcript test helpers to shared crate
+    
+    Extract make_entry, write_transcript, make_pr_link_entry into
+    mementor-test-util::transcript to eliminate duplication between
+    mementor-lib ingest tests and mementor-cli test_util.
+    
+    * simplify code with let-chains and idiomatic patterns
+    
+    - chunker.rs: extract tool_summary once instead of double matching
+    - parser.rs: convert 5-tuple destructure to let-chains
+    - ingest.rs: use or_insert(f64::MAX) + min for HashMap merge,
+      remove header.clone() via length comparison
+    - types.rs: use let-else + then_some in extract_tool_summary()
+
+commit 0e8bb20c953ea3935d3b282c46b11bbbd7c2fce7
+Author: Heejoon Kang <haseo.hackers@gmail.com>
+Date:   Thu Feb 19 21:23:45 2026 +0900
+
+    add query classification to skip trivial prompts (#31)
+    
+    * add query classification to skip recall for trivial prompts
+    
+    Language-adaptive information unit counting handles CJK scripts
+    (each logographic character = 1 unit) alongside space-separated
+    languages. Slash command detection works at any position in the
+    prompt, distinguishing from file paths by absence of subsequent /.
+    
+    * simplify query classification code
+    
+    Add Eq derive to QueryClass. Remove redundant is_empty() check
+    in handle_prompt() now subsumed by classify_query().
+
+commit 142153464df470664ac610bb7db0bcf342ab965b
+Author: Heejoon Kang <haseo.hackers@gmail.com>
+Date:   Thu Feb 19 16:51:39 2026 +0900
+
+    add PreToolUse and SubagentStart hooks (#30)
+
+commit bdc100537fabfb37e277407c640028be15d85c23
+Author: Heejoon Kang <haseo.hackers@gmail.com>
+Date:   Thu Feb 19 16:39:41 2026 +0900
+
+    expand recall quality v3 into 5 task documents (#29)
+    
+    * expand recall quality v3 into 5 task documents
+    
+    Rewrite the v3 parent doc to cover query intelligence and access
+    pattern search. Add task documents for query classification, schema
+    redesign, subagent indexing, access pattern centroids, and query
+    enrichment.
+    
+    * revise v3 design docs for PR #28 changes
+    
+    Update all 6 docs to reflect the file-aware hybrid search
+    implementation: resolved file_mentions dependency, updated
+    schema migration numbering, noted existing extract_file_paths
+    and get_recent_file_mentions reuse, corrected dependency chain,
+    and acknowledged PreToolUse/SubagentStart hooks.
+
+commit 0004057bba82f23d3d6def45bd8180e34cbbf4ea
+Author: Heejoon Kang <haseo.hackers@gmail.com>
+Date:   Thu Feb 19 15:43:37 2026 +0900
+
+    add file-aware hybrid search and hook-based file context (#28)
+    
+    * add file-aware hybrid search with path normalization
+    
+    Add file_mentions table (v3 migration) to track file paths from tool
+    usage during ingestion. Extend search_context() from 5-phase to 8-phase
+    hybrid pipeline that combines vector similarity with file-path lookup.
+    Store paths as project-relative with cross-worktree normalization.
+    
+    * add PreToolUse and SubagentStart hook handlers
+    
+    PreToolUse injects past file context via additionalContext JSON when
+    Claude accesses a file (Read/Edit/Write/NotebookEdit). SubagentStart
+    injects recently touched file paths into subagent context. Both hooks
+    registered in the enable command with appropriate matchers.
+    
+    * simplify hook handlers and deduplicate helpers
+    
+    Extract looks_like_path() and compact_boundary_for() to remove
+    duplicated logic, fix double header bug in PreToolUse output,
+    remove unused imports, and correct doc comment.
+    
+    * add commit references to history docs
+    
+    * use full JSON comparison in hook tests
+    
+    * capture @-mentioned file paths from user prompts
+    
+    * address code review findings
+    
+    - add PartialEq derive and full struct assertions for hook input tests
+    - add empty-result guard in search_file_context to prevent header-only output
+    - fix ingest CLI to use actual CWD for project_dir (not project_root)
+    - sort before dedup in extract_file_hints and extract_at_mentions
+    - update history docs with implementation deviations
+    
+    * update history docs with commit references
+
+commit c34354cb2483c186aaff03be2e0f698d29ae81c3
+Author: Heejoon Kang <haseo.hackers@gmail.com>
+Date:   Thu Feb 19 14:19:25 2026 +0900
+
+    add recall quality v3 design document (#27)
+
+commit de5f144225769cfe5011b7ce9ff6c992683251df
+Author: Heejoon Kang <haseo.hackers@gmail.com>
+Date:   Thu Feb 19 11:02:57 2026 +0900
+
+    share mementor database across git worktrees (#24)
+    
+    * share mementor database across git worktrees
+    
+    Resolve project root to the primary worktree via .git/commondir chain
+    so all linked worktrees use the same .mementor/mementor.db. Submodule
+    .git files are skipped during the walk-up search. Enable WAL mode and
+    busy_timeout for safe concurrent access. Restrict mementor enable to
+    the primary worktree only.
+    
+    * fix enable guard with ResolvedWorktree enum
+    
+    The enable guard used is_primary_worktree(cwd) which fails when cwd
+    is a subdirectory of the primary worktree. Path comparison alternatives
+    like starts_with break with symlinks. Instead, resolve_worktree()
+    classifies the worktree type by .git entry inspection at startup and
+    stores the is_linked flag in MementorContext.
+    
+    * remove dead resolve_primary_root and is_primary_worktree
+    
+    * fix CI submodule tests with protocol.file.allow
+    
+    Git 2.38.1+ blocks local file transport by default, causing
+    submodule tests to fail on CI runners.
+    
+    * fix enable guard tests to follow guidelines
+    
+    Use assert_eq! for full output matching, verify stdout/stderr,
+    and simplify setup by removing unnecessary real git repo.
+    
+    * enforce testing guidelines in CLAUDE.md
+    
+    * extract mementor-test-util crate
+    
+    Share git test helpers (init_git_repo, run_git,
+    assert_paths_eq) across mementor-lib and mementor-cli
+    as a dev-dependency-only crate.
+    
+    * shorten fully-qualified paths in enable tests
+
+commit 1a35d66cb8e0bde76cb7c07c43244ab929e50773
+Author: Heejoon Kang <haseo.hackers@gmail.com>
+Date:   Thu Feb 19 11:00:15 2026 +0900
+
+    add tool context enrichment for vector search (#25)
+
+commit 2ec0f5438c82c8e98f88bbddb76734e55da4a0ee
+Author: Heejoon Kang <haseo.hackers@gmail.com>
+Date:   Thu Feb 19 10:06:11 2026 +0900
+
+    add general assertion guidelines to testing doc (#26)
+
+commit 641d29c807a2eacfac13811a2850d8df522bf09b
+Author: Heejoon Kang <haseo.hackers@gmail.com>
+Date:   Wed Feb 18 23:42:53 2026 +0900
+
+    add thinking block indexing and unknown block fallback (#23)
+    
+    ContentBlock now deserializes thinking blocks (extracting reasoning
+    text into embeddings) and falls back to Unknown for unrecognized
+    block types instead of failing the entire JSONL line. Unknown blocks
+    are logged at debug level with the raw line for future investigation.
+
+commit 38df1166292648a79762db58750fc1145a830da5
+Author: Heejoon Kang <haseo.hackers@gmail.com>
+Date:   Wed Feb 18 23:23:00 2026 +0900
+
+    handle null prompt in hook stdin input (#22)
+    
+    Claude Code can send null for the prompt field in UserPromptSubmit
+    hook input (e.g., when using @-file references only). Add a custom
+    serde deserializer to map null to empty string and skip recall when
+    the prompt is empty.
+    
+    Fixes #20
+
+commit f4aa6d68988b34e15cc5624d3532bb664fa75024
+Author: Heejoon Kang <haseo.hackers@gmail.com>
+Date:   Wed Feb 18 21:42:33 2026 +0900
+
+    add workflow step 6 and worktree permission sharing (#18)
+    
+    * add workflow step 6: complete TODOs before PR
+    
+    * add worktree permission sharing via Deno script
+    
+    Promote safe permissions to committed settings.json and add a Deno
+    TypeScript script that copies settings.local.json to new worktrees
+    and generates per-subcommand git -C permission entries. Includes
+    integration tests, CI workflow, and /worktree skill updates.
+    
+    * add deno script conventions and apply them
+    
+    Add docs/deno-script-conventions.md. Refactor worktree_settings.ts to
+    use import.meta.main guard, underscore naming, and exported functions.
+    Rewrite tests to use direct imports for unit tests and dax for
+    integration tests. Add @david/dax dependency.
+    
+    * add deno script conventions reference to AGENTS.md
+    
+    * update history doc with AGENTS.md reference link
+
+commit 083d049d7bc2566ab474dd4613788d51c82f7ba5
+Author: Heejoon Kang <haseo.hackers@gmail.com>
+Date:   Wed Feb 18 19:40:41 2026 +0900
+
+    add recall quality v2 task documents (#19)
+    
+    Plan documents for 4-task improvement chain: thinking block
+    indexing, tool context enrichment, file-aware hybrid recall,
+    and metadata-driven recall. Includes parent overview document
+    and transcript JSONL format reference.
+
+commit 3bebb4e2b1b619477b1ffd3353fbf8227789c37a
+Author: Heejoon Kang <haseo.hackers@gmail.com>
+Date:   Wed Feb 18 14:58:01 2026 +0900
+
+    revise workflow section to enforce explicit plan steps (#15)
+
+commit 24a4e7a698f7a16f67d64bb3c24b2f62ae75066c
+Author: Heejoon Kang <haseo.hackers@gmail.com>
+Date:   Wed Feb 18 14:56:45 2026 +0900
+
+    preserve settings.json key order in enable (#16)
+
+commit e7cfbb5f5f260f659fea783c2a7bf30ae745a208
+Author: Heejoon Kang <haseo.hackers@gmail.com>
+Date:   Wed Feb 18 14:51:07 2026 +0900
+
+    replace LFS checkout with HF Hub model download (#17)
+
+commit aaa7b3b3d9546a32fbc84339b346151823851dad
+Author: Heejoon Kang <haseo.hackers@gmail.com>
+Date:   Wed Feb 18 13:01:54 2026 +0900
+
+    add post-search filtering pipeline for recall quality (#14)
+
+commit 53cfe316936cbe417b30789d6f77182ff25e900c
+Author: Heejoon Kang <haseo.hackers@gmail.com>
+Date:   Wed Feb 18 12:38:35 2026 +0900
+
+    fix x86_64 onnx runtime cache in CI (#11)
+
+commit 8c1d8bf93aa95c91ef93c6c0dcf162b30c3ab98d
+Author: Heejoon Kang <haseo.hackers@gmail.com>
+Date:   Wed Feb 18 11:05:31 2026 +0900
+
+    add /worktree skill for git worktree management (#13)
+
+commit 4dcc720e0779b5801938ee1bdddff868a24d7872
+Author: Heejoon Kang <haseo.hackers@gmail.com>
+Date:   Wed Feb 18 10:22:19 2026 +0900
+
+    add PreCompact hook to settings.json (#12)
+
+commit 94385d498a7244790b95181ac88bac56b98880eb
+Author: Heejoon Kang <haseo.hackers@gmail.com>
+Date:   Wed Feb 18 09:35:08 2026 +0900
+
+    fix settings.json overwrite in enable command (#10)
+
+commit dc6fd0038521d9910358c6ddf0459e1d6d7592e9
+Author: Heejoon Kang <haseo.hackers@gmail.com>
+Date:   Wed Feb 18 08:26:52 2026 +0900
+
+    add log filter, rich debug logging, and PreCompact hook (#8)
+    
+    add log filter, debug logging, and PreCompact hook
+    
+    - Add EnvFilter to suppress external crate TRACE noise (99.9% of log)
+    - Add structured debug logging throughout ingest/search pipeline
+    - Add PreCompact hook handler with compaction boundary tracking
+    - Schema migration v2: add last_compact_line_index to sessions
+    - Tag search results as recent/pre-compaction/cross-session
+
+commit 958bb5450548cdba463dff3e899c36991b56dd84
+Author: Heejoon Kang <haseo.hackers@gmail.com>
+Date:   Tue Feb 17 22:33:41 2026 +0900
+
+    add subcommand-level integration tests (#9)
+    
+    * add subcommand-level integration tests
+    
+    Implement 15 integration tests across all CLI subcommands following
+    a 5-rule pattern: colocated tests, try_run() dispatch, in-memory DB
+    isolation, direct seeding, and full output matching. Add test helpers,
+    mise test tasks with NO_COLOR, and testing patterns documentation.
+    
+    * clarify execution function references in docs
+    
+    * add trim_margin! macro for readable test strings
+    
+    Replaces \x20 hex escapes with Kotlin-style margin markers.
+
+commit 71485334d3f78847b52021ea681e51a21c62fd57
+Author: Heejoon Kang <haseo.hackers@gmail.com>
+Date:   Tue Feb 17 21:11:15 2026 +0900
+
+    add Runtime/DatabaseDriver DI and simplify context (#7)
+    
+    * add Runtime/DatabaseDriver DI and simplify context
+    
+    Replace MementorContext trait with concrete struct, eliminating
+    the C type parameter from all function signatures. Introduce
+    DatabaseDriver enum (File/InMemory) as a connection factory and
+    Runtime struct bundling context + db. Encapsulate open_db behind
+    DatabaseDriver so connection internals stay private to db module.
+    
+    * add vscode cSpell dictionary config
+    
+    * take &mut Connection in init_connection
+
+commit 16790ccc56d4cfad262466c0fd114775c747c443
+Author: Jerry <63136048+jerry-company@users.noreply.github.com>
+Date:   Tue Feb 17 19:00:59 2026 +0900
+
+    add file-based JSONL logging and DI refactoring (#6)
+    
+    * add workflow section and file-logging task doc
+    
+    Document the mandatory development workflow (feature branch, history
+    doc, todo tracking) in CLAUDE.md. Add the task document for the
+    file-logging milestone.
+    
+    * refactor ConsoleOutput to ConsoleIO and add log_dir to context
+    
+    Rename ConsoleOutput<OUT, ERR> to ConsoleIO<IN, OUT, ERR> so stdin
+    follows the same DI pattern as stdout/stderr. Add log_dir() to the
+    MementorContext trait with a default None, and add with_log_dir()
+    constructor to RealMementorContext for env-based configuration.
+    
+    * add file-based JSONL logging with automatic cleanup
+    
+    When MEMENTOR_LOG_DIR is set, write structured JSONL logs to
+    $MEMENTOR_LOG_DIR/<dirname>-<sha256_8hex>/yyyy-mm-dd.jsonl.
+    Automatically delete log files older than 28 days. Capture all
+    panics and errors in main via a custom panic hook and tracing.
+    
+    ---------
+    
+    Co-authored-by: Kang Heejoon <haseo.hackers@gmail.com>
+
+commit a5f514e4ac16690bcc9b8a190669507d2f6a5e91
+Author: Jerry <63136048+jerry-company@users.noreply.github.com>
+Date:   Tue Feb 17 16:46:10 2026 +0900
+
+    add workflow section to agent instructions (#5)
+    
+    Co-authored-by: Kang Heejoon <haseo.hackers@gmail.com>
+
+commit f51183366735c56df118cd65d6d5d08362f23641
+Author: Jerry <63136048+jerry-company@users.noreply.github.com>
+Date:   Tue Feb 17 16:37:53 2026 +0900
+
+    update README and add worktree guide (#4)
+    
+    * update README and add worktree guide
+    
+    - replace ASCII architecture diagrams with Mermaid
+    - fix vector_distance_cos → vector_full_scan
+    - set license to MIT, add Entire CLI acknowledgment
+    - add git worktree setup instructions to AGENTS.md
+    
+    * fix mermaid line breaks to use <br/> tags
+    
+    * fix worktree setup order in AGENTS.md
+    
+    ---------
+    
+    Co-authored-by: Kang Heejoon <haseo.hackers@gmail.com>
+
+commit ed66b7bf88791e48d22e44b2ab6fda4a4302ae30
+Author: Jerry <63136048+jerry-company@users.noreply.github.com>
+Date:   Tue Feb 17 15:52:55 2026 +0900
+
+    add merge queue support and commit skill rule (#3)
+    
+    * add merge_group trigger to CI workflow
+    
+    * require /commit skill for all git commits
+    
+    ---------
+    
+    Co-authored-by: Kang Heejoon <haseo.hackers@gmail.com>
+
+commit ad588fc4d657738c0a44c9c60d60bf001674cb0e
+Author: Jerry <63136048+jerry-company@users.noreply.github.com>
+Date:   Tue Feb 17 15:28:08 2026 +0900
+
+    fix hook input to use snake_case field names (#2)
+    
+    Claude Code passes hook stdin fields in snake_case (session_id,
+    transcript_path), not camelCase. Remove #[serde(rename)] attributes
+    and add Stop/UserPromptSubmit hook configuration to settings.
+    
+    Co-authored-by: Kang Heejoon <haseo.hackers@gmail.com>
+
+commit 53a47c25e18b35c1fad7c1ccbeef23d60a1f4200
+Author: Jerry <63136048+jerry-company@users.noreply.github.com>
+Date:   Tue Feb 17 14:55:48 2026 +0900
+
+    implement milestone 1 core pipeline (#1)
+    
+    * implement milestone 1 core pipeline
+    
+    3-crate Cargo workspace (mementor-lib, mementor-cli, mementor-main)
+    with sqlite-vector static compilation, BGE-small-en-v1.5 bundled
+    embedding, turn-based chunking with sub-chunk overlap, incremental
+    ingestion via provisional turns, and Claude Code lifecycle hooks
+    for automatic context recall.
+    
+    * add commit skill to allowed permissions
+    
+    * use static ort on aarch64, dynamic on x86_64
+    
+    Split fastembed features by target: ort-download-binaries
+    for aarch64-apple-darwin (prebuilt static binary available),
+    ort-load-dynamic for x86_64-apple-darwin (no prebuilt).
+    
+    * add CI workflow for macOS intel and apple silicon
+    
+    * track onnx model files with git-lfs
+    
+    * mark vendor directory as vendored code
+    
+    * fix CI: per-arch concurrency and build order
+    
+    Move concurrency group to job level with matrix.arch to
+    prevent matrix jobs from cancelling each other. Run cargo
+    build before clippy so DEP_SQLITE3_INCLUDE is available.
+    
+    * fix build.rs sqlite3 header fallback and CI lfs
+    
+    Add fallback in build.rs to find sqlite3.h in cargo registry
+    when DEP_SQLITE3_INCLUDE is not set. Enable LFS checkout in
+    CI so the bundled ONNX model is downloaded.
+    
+    * refactor CI with cross-compile and local action
+    
+    Replace macos-13 matrix with x86_64 cross-compilation on
+    aarch64 runner. Extract mise setup into reusable composite
+    action at .github/actions/setup-mise-macos.
+    
+    * add debug logging to build.rs for CI diagnosis
+    
+    * vendor sqlite3.h to fix parallel build script race
+    
+    build.rs now uses a vendored sqlite3.h alongside sqlite-vector sources
+    instead of relying on DEP_SQLITE3_INCLUDE from libsqlite3-sys, which
+    is not reliably available when cargo build scripts run in parallel.
+    
+    * remove unnecessary libsqlite3-sys direct dependency
+    
+    no longer needed since sqlite3.h is vendored directly;
+    rusqlite already pulls in libsqlite3-sys transitively.
+    
+    * update Cargo.lock
+    
+    * fix deps misplaced under x86_64 target section
+    
+    rusqlite, serde_json, tokenizers, and other general dependencies
+    were accidentally scoped to x86_64-only, causing aarch64 CI to fail.
+    
+    * simplify CI: remove redundant build steps, add x86_64 tests
+    
+    clippy already performs a full build, so the separate build step is
+    unnecessary. add x86_64 test execution via Rosetta 2 on aarch64 runner.
+    
+    * install x86_64 onnxruntime via homebrew for CI tests
+    
+    x86_64 tests need ort-load-dynamic which requires libonnxruntime.dylib.
+    install x86_64 homebrew and onnxruntime on the aarch64 CI runner.
+    
+    * consolidate CI jobs into a single matrix
+    
+    * consolidate CI jobs into a single data-driven matrix
+    
+    * add release build step to CI
+    
+    * separate caches and add ORT + release build
+    
+    split mise cache (composite action) from cargo cache (workflow).
+    add x86_64 Homebrew/onnxruntime cache with idempotent setup.
+    add release build step.
+    
+    ---------
+    
+    Co-authored-by: Kang Heejoon <haseo.hackers@gmail.com>
+
+commit b873a12050d80ae757edc818b8e1b67a156c7184
+Author: Kang Heejoon <haseo.hackers@gmail.com>
+Date:   Tue Feb 17 12:32:18 2026 +0900
+
+    add MIT license
+
+commit 18c8e20243d1fd9e67aa989cdf8cba3afef4df1f
+Author: Kang Heejoon <haseo.hackers@gmail.com>
+Date:   Tue Feb 17 11:22:38 2026 +0900
+
+    add shared tool permissions to project settings
+
+commit 40db9702acb5ccd18e580e51cc94e419629ff48a
+Author: Kang Heejoon <haseo.hackers@gmail.com>
+Date:   Tue Feb 17 09:18:50 2026 +0900
+
+    add commit custom skill
+
+commit 5ff361d8500615b2902327fe293ed95a8d6e4d59
+Author: Kang Heejoon <haseo.hackers@gmail.com>
+Date:   Tue Feb 17 08:57:15 2026 +0900
+
+    add Claude Code project configuration
+
+commit 5fe74b2d9484d615daa3499f50004189349fabb9
+Author: Kang Heejoon <haseo.hackers@gmail.com>
+Date:   Tue Feb 17 08:44:32 2026 +0900
+
+    initial commit</bash-stdout><bash-stderr></bash-stderr>
+
+---
+
+<bash-input>git log -n 1</bash-input>
+
+---
+
+<bash-stdout>commit 5818f494ef609eb77c81ea0fcadc7f70ce43bae6
+Author: Kang Heejoon <haseo.hackers@gmail.com>
+Date:   Tue Feb 24 18:03:22 2026 +0900
+
+    add TUI + plugin pivot design documents and deprecate phases 3-5
+    
+    Pivot mementor from local RAG memory agent to TUI workspace tool +
+    Claude Code knowledge mining plugin built on entire-cli checkpoint
+    data. Adds 9 phased design docs, rewrites README, and marks old
+    phase 3-5 TODOs as deprecated.</bash-stdout><bash-stderr></bash-stderr>
+
+---
+
+push & pr
+
+---
+
+merge queue에 넣었어. ci watch하다가 머지 완료되면 clean up해줘
+
+---
+
+너 agent teammate mode로 동작할 수 있어?
+
+---
+
+#41 pr이 머지큐에 있는데 머지되면 바로 origin/main을 싱크해줘.
+
+---
+
+너 agent teammate mode로 동작할 수 있어?
+
+---
+
+아까 세운 계획의 끝까지 바로 팀으로 나눠서 작업 가능해?
+
+---
+
+phase 0~ 끝까지를 말하는거야
+
+---
+
+ㅇㅋ. 알았어. 하나씩 하자
+
+---
+
+This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+Analysis:
+Let me chronologically analyze the conversation:
+
+1. **First task**: User asked to implement a plan to write TUI + Plugin Pivot Design Documents. The plan was already detailed with exact file contents for 9 design documents, README rewrite, and updates to 4 existing history documents.
+
+2. **Execution**: I asked about worktree vs current directory (user chose current directory), created feature branch `tui-plugin-pivot-docs`, wrote all 9 documents under `history/2026-02-23_tui-plugin-pivot/`, rewrote README.md, updated 4 existing history docs with deprecation notices, and committed via `/commit`.
+
+3. **PR and merge**: User asked to push and create PR. I checked gh auth (powdream was active, correct for fenv-org), pushed, created PR #40. User put it in merge queue, I watched CI pass and waited for merge, then cleaned up (checkout agent1, fetch main, rebase, delete local branch).
+
+4. **PR #41 merge watch**: User asked me to watch PR #41 in merge queue and sync origin/main when merged. I waited, it merged, then fetched and rebased agent1 on latest main.
+
+5. **Agent teammate mode question**: User asked if I can work in agent teammate mode. I said yes and asked what they had in mind.
+
+6. **Phase 0-end question**: User asked if I could run all phases (0 through end) as a team. I explained the sequential dependencies and that it's a massive rewrite. User agreed to do it one phase at a time.
+
+7. **Phase 0 planning**: I entered plan mode, explored the codebase thoroughly (all Cargo.toml files, key source files, CI workflow, mise.toml), then wrote a detailed implementation plan for Phase 0 (workspace cleanup + scaffold).
+
+8. **Phase 0 implementation** (in progress): User approved the plan and chose current directory. I:
+   - Created branch `phase0-workspace-cleanup`
+   - Deleted all old crates/directories/files via `git rm -r`
+   - Created new directory structure
+   - Wrote new files: root Cargo.toml, mementor-lib Cargo.toml, lib.rs, git/mod.rs, git/worktree.rs (with inlined test helpers), context.rs (simplified), mementor-tui crate (Cargo.toml, lib.rs, app.rs stubs), mementor-main (Cargo.toml, main.rs rewritten), mise.toml, ci.yml
+   - Encountered Write errors for files not yet read (Cargo.toml, mementor-lib Cargo.toml, lib.rs) - fixed by reading first then writing
+   - Was in the middle of reading CLAUDE.md to update it when the summary was requested
+
+Let me identify all the key files and their states:
+
+**Files deleted:**
+- crates/mementor-schema-gen/ (entire)
+- crates/mementor-test-util/ (entire)
+- crates/mementor-cli/ (entire)
+- vendor/sqlite-vector/ (entire)
+- crates/mementor-lib/ddl/ (entire)
+- crates/mementor-lib/build.rs
+- crates/mementor-lib/src/db/
+- crates/mementor-lib/src/pipeline/
+- crates/mementor-lib/src/embedding/
+- crates/mementor-lib/src/transcript/
+- crates/mementor-lib/src/config.rs
+- crates/mementor-lib/src/output.rs
+- crates/mementor-lib/src/runtime.rs
+- crates/mementor-lib/src/test_util.rs
+- crates/mementor-lib/src/git.rs
+
+**Files created:**
+- crates/mementor-lib/src/git/mod.rs
+- crates/mementor-lib/src/git/worktree.rs
+- crates/mementor-tui/Cargo.toml
+- crates/mementor-tui/src/lib.rs
+- crates/mementor-tui/src/app.rs
+
+**Files modified:**
+- Cargo.toml (workspace members updated to 3 crates)
+- crates/mementor-lib/Cargo.toml (stripped old deps, added tokio/jiff)
+- crates/mementor-lib/src/lib.rs (only context and git modules)
+- crates/mementor-lib/src/context.rs (simplified - removed DB/model/log fields)
+- crates/mementor-main/Cargo.toml (new deps)
+- crates/mementor-main/src/main.rs (rewritten)
+- mise.toml (removed model:download, schema:dump)
+- .github/workflows/ci.yml (simplified - single aarch64 job)
+
+**Still pending in Phase 0:**
+- Update CLAUDE.md (was reading it when summary was requested)
+- Update history doc with TODO progress
+- Run cargo check/clippy/fmt verification
+- Commit via /commit
+
+Summary:
+1. Primary Request and Intent:
+   The user's overarching goal is to pivot the mementor project from a local RAG memory agent (SQLite + embedding pipeline) to a TUI workspace tool + Claude Code knowledge mining plugin built on entire-cli checkpoint data. The work is organized into 8 phases (0-7) documented in `history/2026-02-23_tui-plugin-pivot/`. The user explicitly agreed to execute phases sequentially, starting with Phase 0 (Workspace Cleanup + Scaffold). Phase 0's goal: strip the workspace from 5 crates to 3, remove all SQLite/embedding/vector dependencies, add TUI dependencies, create stubs, and verify `cargo check` + `cargo clippy` pass.
+
+2. Key Technical Concepts:
+   - **Workspace restructuring**: 5 crates → 3 (mementor-lib, mementor-tui, mementor-main)
+   - **mementor-tui**: New crate replacing mementor-cli, using ratatui + crossterm for TUI
+   - **Async architecture**: tokio runtime for non-blocking git/entire CLI operations
+   - **Data source pivot**: From local SQLite + embedding → reading entire-cli checkpoint data from git branch `entire/checkpoints/v1`
+   - **Preserved code**: `resolve_worktree()` / `ResolvedWorktree` (moved to git/worktree.rs), `MementorContext` (simplified in context.rs)
+   - **Test helpers inlining**: `init_git_repo`, `run_git`, `assert_paths_eq` moved from mementor-test-util into `#[cfg(test)] mod test_helpers` in worktree.rs
+   - **CI simplification**: Removed x86_64 matrix, ONNX model caching, Homebrew ORT setup
+   - **Git workflow conventions**: Always use `/commit` skill, `/worktree` skill, feature branches, history documents
+
+3. Files and Code Sections:
+
+   - **`Cargo.toml` (workspace root)** — Updated to 3 members
+     ```toml
+     [workspace]
+     members = [
+         "crates/mementor-lib",
+         "crates/mementor-tui",
+         "crates/mementor-main",
+     ]
+     resolver = "3"
+     ```
+
+   - **`crates/mementor-lib/Cargo.toml`** — Stripped all old deps, added new
+     ```toml
+     [dependencies]
+     anyhow = "1"
+     serde = { version = "1", features = ["derive"] }
+     serde_json = "1"
+     tracing = "0.1"
+     tokio = { version = "1", features = ["process", "sync", "macros", "rt-multi-thread"] }
+     jiff = "0.2"
+
+     [dev-dependencies]
+     tempfile = "3"
+     ```
+
+   - **`crates/mementor-lib/src/lib.rs`** — Reduced to 2 modules
+     ```rust
+     pub mod context;
+     pub mod git;
+     ```
+
+   - **`crates/mementor-lib/src/git/mod.rs`** — New module root with re-exports
+     ```rust
+     pub mod worktree;
+     pub use worktree::{ResolvedWorktree, resolve_worktree};
+     ```
+
+   - **`crates/mementor-lib/src/git/worktree.rs`** — Moved from git.rs with inlined test helpers. Contains `ResolvedWorktree` enum (Primary/Linked/NotGitRepo), `resolve_worktree()`, `try_resolve_linked_worktree()`, plus `#[cfg(test)] mod test_helpers` with `init_git_repo`, `run_git`, `assert_paths_eq` (previously in mementor-test-util). All 10 original tests preserved.
+
+   - **`crates/mementor-lib/src/context.rs`** — Simplified MementorContext
+     ```rust
+     pub struct MementorContext {
+         project_root: PathBuf,
+         cwd: PathBuf,
+         is_linked_worktree: bool,
+     }
+     ```
+     Removed: `model_cache_dir`, `log_dir`, `db_path()`, `mementor_dir()`, `claude_settings_path()`, `gitignore_path()`, `dirs` dependency. Constructors simplified to `new(project_root)` and `with_cwd(cwd, project_root, is_linked_worktree)`.
+
+   - **`crates/mementor-tui/Cargo.toml`** — New crate with TUI dependencies
+     ```toml
+     [dependencies]
+     mementor-lib = { path = "../mementor-lib" }
+     ratatui = { version = "0.29", default-features = false, features = ["crossterm"] }
+     crossterm = "0.28"
+     clap = { version = "4", features = ["derive"] }
+     tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+     anyhow = "1"
+     tracing = "0.1"
+     tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+     ```
+
+   - **`crates/mementor-tui/src/lib.rs`** — Stub: `pub mod app;`
+   - **`crates/mementor-tui/src/app.rs`** — Stub: `// TODO: Phase 2`
+
+   - **`crates/mementor-main/Cargo.toml`** — Rewritten deps
+     ```toml
+     [dependencies]
+     anyhow = "1"
+     mementor-lib = { path = "../mementor-lib" }
+     mementor-tui = { path = "../mementor-tui" }
+     ```
+
+   - **`crates/mementor-main/src/main.rs`** — Minimal placeholder
+     ```rust
+     use std::path::Path;
+     use mementor_lib::git::resolve_worktree;
+
+     fn main() -> anyhow::Result<()> {
+         let cwd = std::env::current_dir()?;
+         let resolved = resolve_worktree(&cwd);
+         let _is_linked = resolved.is_linked();
+         let _project_root = resolved
+             .primary_root()
+             .map_or_else(|| cwd.clone(), Path::to_path_buf);
+         // TODO: Phase 2 — launch TUI or dispatch CLI subcommands
+         Ok(())
+     }
+     ```
+
+   - **`mise.toml`** — Removed `model:download` and `schema:dump` tasks. Kept test, test:unit, deno:* tasks.
+
+   - **`.github/workflows/ci.yml`** — Simplified to single aarch64 job. Removed x86_64 matrix, ONNX model cache, Homebrew/ORT setup, model download step.
+
+   - **`CLAUDE.md`** — Read but NOT YET UPDATED. This is the next pending step.
+
+   - **`REDACTED.md`** — Exists from earlier PR, TODOs not yet marked as done.
+
+   - **Files deleted** (via `git rm -r`): crates/mementor-schema-gen/, crates/mementor-test-util/, crates/mementor-cli/, vendor/sqlite-vector/, crates/mementor-lib/ddl/, crates/mementor-lib/build.rs, crates/mementor-lib/src/{db,pipeline,embedding,transcript}/, crates/mementor-lib/src/{config,output,runtime,test_util,git}.rs
+
+   - **Earlier completed work (PR #40)**: 9 design documents created under `history/2026-02-23_tui-plugin-pivot/` (00_overview through 08_cleanup-docs), README.md rewritten, 4 history docs deprecated. All merged to main.
+
+4. Errors and fixes:
+   - **Write tool errors**: When trying to write `Cargo.toml`, `crates/mementor-lib/Cargo.toml`, and `crates/mementor-lib/src/lib.rs`, got "File has not been read yet. Read it first before writing to it." Fixed by reading each file first, then writing. The other files in the same batch (new files like git/mod.rs, worktree.rs, context.rs, mementor-tui files) succeeded because they were either new files or had been read earlier.
+   - **git pull failure**: When cleaning up after PR #40 merge, `git pull origin agent1` failed because `agent1` branch doesn't exist on remote. Fixed by using `git fetch origin main && git rebase origin/main` instead.
+
+5. Problem Solving:
+   - Identified that `mementor-test-util` git helpers needed to be inlined into worktree.rs since the crate was being deleted. Retrieved the source via `git show HEAD:crates/mementor-test-util/src/git.rs` before deletion, then embedded as `#[cfg(test)] mod test_helpers`.
+   - Determined that Phase 1 stubs (entire/, model/, cache.rs) should NOT be created in Phase 0 — cleaner to add them when implementing Phase 1.
+   - CI simplified by removing x86_64 entirely rather than trying to maintain a slimmed-down cross-compile setup.
+
+6. All user messages:
+   - "Implement the following plan: [detailed plan for TUI + Plugin Pivot Design Documents]"
+   - (chose "Current directory" for workspace question)
+   - (ran `git log` locally)
+   - "push & pr" (after viewing git log)
+   - "merge queue에 넣었어. ci watch하다가 머지 완료되면 clean up해줘"
+   - "#41 pr이 머지큐에 있는데 머지되면 바로 origin/main을 싱크해줘."
+   - "너 agent teammate mode로 동작할 수 있어?"
+   - "phase 0~ 끝까지를 말하는거야" (clarifying they want all phases done as team)
+   - "ㅇㅋ. 알았어. 하나씩 하자" (agreed to do phases one at a time)
+   - (chose "Current directory" for Phase 0 workspace question)
+
+7. Pending Tasks:
+   - **Update CLAUDE.md** for new architecture (was reading it when interrupted — Step 11 of plan)
+   - **Update history doc** `REDACTED.md` with TODO progress
+   - **Run verification**: `cargo check`, `cargo clippy -- -D warnings`, `cargo fmt --check`
+   - **Commit via `/commit`** skill
+   - **Create PR** and watch merge (user pattern suggests they'll want this)
+
+8. Current Work:
+   Actively implementing Phase 0 (Workspace Cleanup + Scaffold) on branch `phase0-workspace-cleanup`. All file deletions and most new file creation/rewrites are complete. I had just read `CLAUDE.md` (all 322 lines) and was about to rewrite it to reflect the new architecture (removing SQLite/embedding/vector references, updating crate descriptions, etc.) when the summary was requested. This is Step 11 of the 12-step plan.
+
+9. Optional Next Step:
+   Continue with Step 11: Update `CLAUDE.md` to reflect new architecture. The plan specifies: "Key sections to update: Tech Stack (remove SQLite, sqlite-vector, fastembed, text-splitter, FTS5; add ratatui, crossterm, tokio, jiff), Directory Structure (update to 3 crates), Crate Responsibilities, Build section, remove sqlite-vector Integration, Incremental Update Pattern, Turn-Based Chunking, Schema migration sections." Then proceed to Step 12 (verification) and commit. The CLAUDE.md content was fully read and is ready to be rewritten.
+
+If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/heejoon.kang/.REDACTED.jsonl
+Please continue the conversation from where we left off without asking the user any further questions. Continue with the last task that you were asked to work on.
+
+---
+
+Base directory for this skill: /Users/heejoon.kang/dev/git/fenv-org/mementor-agent1/.claude/skills/commit
+
+# Commit Skill
+
+Perform a commit following the project's conventions. Execute the steps below in order.
+
+## 1. Pre-commit checks
+
+1. Run `cargo fmt --check`.
+   - If it fails, run `cargo fmt` automatically and include the formatted files in staging.
+2. Run `cargo clippy -- -D warnings`.
+   - If there are warnings, abort the commit and notify the user of the issues.
+
+## 2. Analyze changes
+
+Run the following commands in parallel to understand the current state:
+
+- `git status` — check untracked files (never use the `-uall` flag)
+- `git diff` — review the actual diff content of both staged and unstaged changes
+- `git log --oneline -5` — reference recent commit style
+
+## 3. Identify topics
+
+Read through the full diff output carefully and determine whether the changes span a single logical topic or multiple distinct topics.
+
+- **Single topic**: All changes relate to one coherent purpose (e.g., "add user authentication", "fix pagination bug"). Proceed directly to step 4.
+- **Multiple topics**: Changes cover more than one logical purpose (e.g., a bug fix mixed with a refactor, or a new feature alongside unrelated formatting changes). In this case:
+  1. Propose how to group the files into separate commits, explaining which files belong to which topic and why.
+  2. Use `AskUserQuestion` to present the proposed groupings and get explicit user approval before proceeding.
+  3. After approval, execute steps 4 and 5 once per approved group, in the order the user confirmed.
+
+## 4. Write the commit message
+
+Follow these rules strictly:
+
+- Language: English
+- Style: lowercase imperative mood (first character is also lowercase)
+- First line: 50 characters or fewer, focus on "what" changed
+- Only when truly necessary, add a detailed body after a blank line to explain "why"
+- Never add Co-Authored-By, attribution, or similar trailers
+
+## 5. Execute the commit
+
+1. Selectively `git add` only the relevant files for the current topic.
+   - Never include `.env`, credentials, or secret files.
+   - Never use `git add -A` or `git add .`.
+2. Pass the commit message using HEREDOC format:
+   ```bash
+   git commit -m "$(cat <<'EOF'
+   commit message here
+   EOF
+   )"
+   ```
+3. Run `git status` after the commit to verify the result.
+
+---
+
+다음 페이즈 진행해. agent teams로
+
+---
+
+<teammate-message teammate_id="git-agent" color="blue" summary="Task #1 done: 4 git modules, 22 tests, all checks pass">
+Task #1 complete — all four git modules implemented:
+
+**git/tree.rs**: `ObjectType` enum, `TreeEntry` struct, `parse_ls_tree_line()`, `ls_tree()`, `show_blob()`, `show_blob_str()`. 6 unit tests parsing fixture `ls-tree` output.
+
+**git/log.rs**: `CommitInfo` struct with `checkpoint_id: Option<String>`, `parse_log_output()`, `log_with_checkpoints()` using `%(trailers:key=Entire-Checkpoint,valueonly,separator=%x2C)` format. 5 unit tests.
+
+**git/diff.rs**: `FileStatus` enum (Added/Modified/Deleted/Renamed), `DiffLine` enum, `DiffHunk`/`FileDiff` structs, `parse_diff_output()`, `diff_commit()` using `git diff-tree -p --no-commit-id -M`. 8 unit tests covering all file statuses and multi-hunk/multi-file diffs.
+
+**git/branch.rs**: `list_branches()` (excludes `entire/*`), `current_branch()`. 3 async integration tests.
+
+All checks pass: `cargo fmt`, `cargo clippy -- -D warnings`, 37 tests (22 new).
+</teammate-message>
+
+---
+
+<teammate-message teammate_id="git-agent" color="blue">
+{"type":"idle_notification","from":"git-agent","timestamp":"2026-02-25T15:34:38.413Z","idleReason":"available"}
+</teammate-message>
+
+---
+
+<teammate-message teammate_id="git-agent" color="blue">
+{"type":"idle_notification","from":"git-agent","timestamp":"2026-02-25T15:35:02.444Z","idleReason":"available"}
+</teammate-message>
+
+---
+
+<teammate-message teammate_id="entire-agent" color="green" summary="Task #2 done: all 3 entire modules implemented, tests pass">
+Task #2 complete. All three entire modules are implemented:
+
+**entire/transcript.rs** — JSONL transcript parser
+- `parse_transcript(jsonl: &[u8])` parses all entry types: user messages (string content → ContentBlock::Text), assistant messages (array of text/thinking/tool_use/tool_result blocks), file-history-snapshot (extracts file paths from trackedFileBackups keys), progress, pr-link, and unknown types
+- `group_into_segments(entries)` groups entries into ConversationSegments, each starting with a user message
+- 14 unit tests covering all entry types, edge cases (empty lines, missing timestamps, non-string tool_result content), and segmentation logic
+
+**entire/checkpoint.rs** — Checkpoint loading from git tree
+- `list_checkpoints()` walks shard/checkpoint dirs via `git::tree::ls_tree`, reads metadata.json via `show_blob_str`, populates session blob_paths
+- `load_checkpoint(id)` derives shard from first 2 chars, loads single checkpoint
+- `parse_checkpoint_meta()` separated for independent testing
+- 7 unit tests for metadata deserialization, blob_path population, defaults, and error handling
+
+**entire/cli.rs** — entire CLI wrappers
+- `explain_short()`, `raw_transcript()`, `status()` — wrap entire CLI commands via `tokio::process::Command`
+- `is_available()` — checks if entire is on PATH
+- 1 test for is_available (non-panicking regardless of install state)
+
+All checks pass: `cargo check`, `cargo clippy -- -D warnings`, `cargo fmt`, and `cargo test --lib` (59 tests, 0 failures).
+</teammate-message>
+
+---
+
+Base directory for this skill: /Users/heejoon.kang/dev/git/fenv-org/mementor-agent1/.claude/skills/commit
+
+# Commit Skill
+
+Perform a commit following the project's conventions. Execute the steps below in order.
+
+## 1. Pre-commit checks
+
+1. Run `cargo fmt --check`.
+   - If it fails, run `cargo fmt` automatically and include the formatted files in staging.
+2. Run `cargo clippy -- -D warnings`.
+   - If there are warnings, abort the commit and notify the user of the issues.
+
+## 2. Analyze changes
+
+Run the following commands in parallel to understand the current state:
+
+- `git status` — check untracked files (never use the `-uall` flag)
+- `git diff` — review the actual diff content of both staged and unstaged changes
+- `git log --oneline -5` — reference recent commit style
+
+## 3. Identify topics
+
+Read through the full diff output carefully and determine whether the changes span a single logical topic or multiple distinct topics.
+
+- **Single topic**: All changes relate to one coherent purpose (e.g., "add user authentication", "fix pagination bug"). Proceed directly to step 4.
+- **Multiple topics**: Changes cover more than one logical purpose (e.g., a bug fix mixed with a refactor, or a new feature alongside unrelated formatting changes). In this case:
+  1. Propose how to group the files into separate commits, explaining which files belong to which topic and why.
+  2. Use `AskUserQuestion` to present the proposed groupings and get explicit user approval before proceeding.
+  3. After approval, execute steps 4 and 5 once per approved group, in the order the user confirmed.
+
+## 4. Write the commit message
+
+Follow these rules strictly:
+
+- Language: English
+- Style: lowercase imperative mood (first character is also lowercase)
+- First line: 50 characters or fewer, focus on "what" changed
+- Only when truly necessary, add a detailed body after a blank line to explain "why"
+- Never add Co-Authored-By, attribution, or similar trailers
+
+## 5. Execute the commit
+
+1. Selectively `git add` only the relevant files for the current topic.
+   - Never include `.env`, credentials, or secret files.
+   - Never use `git add -A` or `git add .`.
+2. Pass the commit message using HEREDOC format:
+   ```bash
+   git commit -m "$(cat <<'EOF'
+   commit message here
+   EOF
+   )"
+   ```
+3. Run `git status` after the commit to verify the result.
+
+---
+
+내가 뭔가 해볼 수 있는건 아직 없지?
+
+---
+
+PR일단 해봐.
+
+---
+
+#42로 돌아가서, ci가 실행되지 않는 문제를 먼저 고쳐야 할 것 같아.
+
+---
+
+#42가 macOS(x86_64)가 pending 상태라서 ci 머지를 못하고 있잖아
+
+---
+
+잉 우리 x8664를 지웠어? 왜?
+
+---
+
+당연히 추가해야지. 지금 실행하고 있는 머신이 mac mini late 2018인데
+
+---
+
+Base directory for this skill: /Users/heejoon.kang/dev/git/fenv-org/mementor-agent1/.claude/skills/commit
+
+# Commit Skill
+
+Perform a commit following the project's conventions. Execute the steps below in order.
+
+## 1. Pre-commit checks
+
+1. Run `cargo fmt --check`.
+   - If it fails, run `cargo fmt` automatically and include the formatted files in staging.
+2. Run `cargo clippy -- -D warnings`.
+   - If there are warnings, abort the commit and notify the user of the issues.
+
+## 2. Analyze changes
+
+Run the following commands in parallel to understand the current state:
+
+- `git status` — check untracked files (never use the `-uall` flag)
+- `git diff` — review the actual diff content of both staged and unstaged changes
+- `git log --oneline -5` — reference recent commit style
+
+## 3. Identify topics
+
+Read through the full diff output carefully and determine whether the changes span a single logical topic or multiple distinct topics.
+
+- **Single topic**: All changes relate to one coherent purpose (e.g., "add user authentication", "fix pagination bug"). Proceed directly to step 4.
+- **Multiple topics**: Changes cover more than one logical purpose (e.g., a bug fix mixed with a refactor, or a new feature alongside unrelated formatting changes). In this case:
+  1. Propose how to group the files into separate commits, explaining which files belong to which topic and why.
+  2. Use `AskUserQuestion` to present the proposed groupings and get explicit user approval before proceeding.
+  3. After approval, execute steps 4 and 5 once per approved group, in the order the user confirmed.
+
+## 4. Write the commit message
+
+Follow these rules strictly:
+
+- Language: English
+- Style: lowercase imperative mood (first character is also lowercase)
+- First line: 50 characters or fewer, focus on "what" changed
+- Only when truly necessary, add a detailed body after a blank line to explain "why"
+- Never add Co-Authored-By, attribution, or similar trailers
+
+## 5. Execute the commit
+
+1. Selectively `git add` only the relevant files for the current topic.
+   - Never include `.env`, credentials, or secret files.
+   - Never use `git add -A` or `git add .`.
+2. Pass the commit message using HEREDOC format:
+   ```bash
+   git commit -m "$(cat <<'EOF'
+   commit message here
+   EOF
+   )"
+   ```
+3. Run `git status` after the commit to verify the result.
+
+---
+
+#42 머지 되는걸 기다렸다가 머지되면 #43을 #42에 리베이스해
+
+---
+
+#43이 머지되면 agent team으로 그 다음 phase 시작해
+
+---
+
+<teammate-message teammate_id="tui-agent" color="blue" summary="TUI app shell and checkpoint list implemented">
+Task #1 is complete. Here's what was implemented:
+
+**Dependencies added**: `futures`, `jiff`
+
+**Files created/modified**:
+
+1. **`src/app.rs`** — Application core
+   - `pub enum View { CheckpointList }` — extensible view enum
+   - `pub struct App` — holds `DataCache`, `ListState`, branch info, running flag, branch popup state
+   - `App::new(cache, branch)` — constructor, auto-selects first checkpoint
+   - `App::setup_terminal()` — enables raw mode + alternate screen
+   - `App::restore_terminal()` — cleanup
+   - `App::run(&mut self, terminal)` — async event loop (100ms poll, sync crossterm events)
+   - Key handling: `q`/`Ctrl-c` quit, `j/k`/arrows navigate, `b` opens branch popup, `r` refreshes cache
+
+2. **`src/views/dashboard.rs`** — Checkpoint list view
+   - Renders checkpoint list with 2-line items: commit subject + detail line (hash, relative time via jiff, agent, files count, token usage formatted as K/M)
+   - Highlighted selection with `DarkGray` background
+
+3. **`src/views/status_bar.rs`** — Key hints bar
+   - Single line: `j/k Navigate  Enter Detail  b Branch  / Search  g Git log  q Quit` with yellow-styled keys
+
+4. **`src/views/branch_popup.rs`** — Branch switcher overlay
+   - Centered popup (~40% width, ~50% height) with bordered list of branches
+   - Current branch highlighted in green+bold
+   - `j/k` navigate, `Enter` selects and refreshes cache, `Esc/q` closes
+
+5. **`src/views/mod.rs`** — re-exports `branch_popup`, `dashboard`, `status_bar`
+6. **`src/lib.rs`** — updated to `pub mod app; pub mod views;`
+
+**Public API** for mementor-main integration:
+```rust
+use mementor_tui::app::App;
+
+let mut terminal = App::setup_terminal()?;
+let cache = DataCache::initialize(&branch).await?;
+let mut app = App::new(cache, branch);
+app.run(&mut terminal).await?;
+App::restore_terminal(&mut terminal)?;
+```
+
+`cargo clippy -- -D warnings` and `cargo fmt --check` both pass clean.
+</teammate-message>
+
+---
+
+Base directory for this skill: /Users/heejoon.kang/dev/git/fenv-org/mementor-agent1/.claude/skills/commit
+
+# Commit Skill
+
+Perform a commit following the project's conventions. Execute the steps below in order.
+
+## 1. Pre-commit checks
+
+1. Run `cargo fmt --check`.
+   - If it fails, run `cargo fmt` automatically and include the formatted files in staging.
+2. Run `cargo clippy -- -D warnings`.
+   - If there are warnings, abort the commit and notify the user of the issues.
+
+## 2. Analyze changes
+
+Run the following commands in parallel to understand the current state:
+
+- `git status` — check untracked files (never use the `-uall` flag)
+- `git diff` — review the actual diff content of both staged and unstaged changes
+- `git log --oneline -5` — reference recent commit style
+
+## 3. Identify topics
+
+Read through the full diff output carefully and determine whether the changes span a single logical topic or multiple distinct topics.
+
+- **Single topic**: All changes relate to one coherent purpose (e.g., "add user authentication", "fix pagination bug"). Proceed directly to step 4.
+- **Multiple topics**: Changes cover more than one logical purpose (e.g., a bug fix mixed with a refactor, or a new feature alongside unrelated formatting changes). In this case:
+  1. Propose how to group the files into separate commits, explaining which files belong to which topic and why.
+  2. Use `AskUserQuestion` to present the proposed groupings and get explicit user approval before proceeding.
+  3. After approval, execute steps 4 and 5 once per approved group, in the order the user confirmed.
+
+## 4. Write the commit message
+
+Follow these rules strictly:
+
+- Language: English
+- Style: lowercase imperative mood (first character is also lowercase)
+- First line: 50 characters or fewer, focus on "what" changed
+- Only when truly necessary, add a detailed body after a blank line to explain "why"
+- Never add Co-Authored-By, attribution, or similar trailers
+
+## 5. Execute the commit
+
+1. Selectively `git add` only the relevant files for the current topic.
+   - Never include `.env`, credentials, or secret files.
+   - Never use `git add -A` or `git add .`.
+2. Pass the commit message using HEREDOC format:
+   ```bash
+   git commit -m "$(cat <<'EOF'
+   commit message here
+   EOF
+   )"
+   ```
+3. Run `git status` after the commit to verify the result.
