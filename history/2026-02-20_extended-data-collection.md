@@ -169,18 +169,18 @@ emit a warning in the output.
 
 ## TODO
 
-- [ ] Implement subagent transcript discovery (glob `agent-*.jsonl`, skip `acompact-*`)
-- [ ] Parse subagent transcripts with same pipeline (set agent_id, is_sidechain)
-- [ ] Add `subagent_sessions` tracking for incremental ingest
-- [ ] Parse `file-history-snapshot` entries → entries + file_mentions
-- [ ] Extract `trackedFileBackups` keys as file paths
-- [ ] Parse `pr-link` entries → pr_links table
-- [ ] Extract session start time from first entry's timestamp
-- [ ] Implement lazy centroid computation on first `find-related` query
-- [ ] Implement `resource_embeddings` cache (embed file paths, store)
-- [ ] Implement per-turn centroid computation → `turn_access_patterns`
-- [ ] Implement per-session centroid computation → `session_access_patterns`
-- [ ] Implement find-related sessions (single-stage vector search)
-- [ ] Implement find-related turns (two-stage: coarse + sliding window)
-- [ ] Handle edge case: fewer than N turns → use all available + warning
-- [ ] Integration tests for each new feature
+- [x] ~~DEPRECATED~~ Implement subagent transcript discovery (glob `agent-*.jsonl`, skip `acompact-*`)
+- [x] ~~DEPRECATED~~ Parse subagent transcripts with same pipeline (set agent_id, is_sidechain)
+- [x] ~~DEPRECATED~~ Add `subagent_sessions` tracking for incremental ingest
+- [x] ~~DEPRECATED~~ Parse `file-history-snapshot` entries → entries + file_mentions
+- [x] ~~DEPRECATED~~ Extract `trackedFileBackups` keys as file paths
+- [x] ~~DEPRECATED~~ Parse `pr-link` entries → pr_links table
+- [x] ~~DEPRECATED~~ Extract session start time from first entry's timestamp
+- [x] ~~DEPRECATED~~ Implement lazy centroid computation on first `find-related` query
+- [x] ~~DEPRECATED~~ Implement `resource_embeddings` cache (embed file paths, store)
+- [x] ~~DEPRECATED~~ Implement per-turn centroid computation → `turn_access_patterns`
+- [x] ~~DEPRECATED~~ Implement per-session centroid computation → `session_access_patterns`
+- [x] ~~DEPRECATED~~ Implement find-related sessions (single-stage vector search)
+- [x] ~~DEPRECATED~~ Implement find-related turns (two-stage: coarse + sliding window)
+- [x] ~~DEPRECATED~~ Handle edge case: fewer than N turns → use all available + warning
+- [x] ~~DEPRECATED~~ Integration tests for each new feature

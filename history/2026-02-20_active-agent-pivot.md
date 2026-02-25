@@ -211,3 +211,14 @@ paths -- no absolute path issues across worktrees.
 - [hook-based-file-context](2026-02-19_hook-based-file-context.md) -- PR #28
 - [query-classification](2026-02-19_query-classification.md) -- PR #31
 - [worktree-db-sharing](2026-02-19_worktree-db-sharing.md) -- PR #24
+
+## Deprecation Notice
+
+**This document and its child phases (3-5) are deprecated.** The active
+agent-driven search approach with local SQLite + embedding pipeline has been
+superseded by:
+
+**[Mementor v2: TUI Workspace Tool + Knowledge Mining Plugin](2026-02-23_tui-plugin-pivot/00_overview.md)**
+
+The new approach eliminates the local database entirely and builds on
+entire-cli's checkpoint data instead. See the linked document for details.
