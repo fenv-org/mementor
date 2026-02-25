@@ -1,0 +1,46 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "7c2f64b26c88",
+  "session_id": "81b5b775-82cd-4a78-a978-0dc8b7b2f53e",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-25T15:38:30.959076Z",
+  "branch": "phase1-data-layer",
+  "checkpoints_count": 6,
+  "files_touched": [
+    "crates/mementor-lib/src/cache.rs",
+    "crates/mementor-lib/src/entire/checkpoint.rs",
+    "crates/mementor-lib/src/entire/cli.rs",
+    "crates/mementor-lib/src/entire/mod.rs",
+    "crates/mementor-lib/src/entire/transcript.rs",
+    "crates/mementor-lib/src/git/branch.rs",
+    "crates/mementor-lib/src/git/command.rs",
+    "crates/mementor-lib/src/git/diff.rs",
+    "crates/mementor-lib/src/git/log.rs",
+    "crates/mementor-lib/src/git/mod.rs",
+    "crates/mementor-lib/src/git/tree.rs",
+    "crates/mementor-lib/src/lib.rs",
+    "crates/mementor-lib/src/model/checkpoint.rs",
+    "crates/mementor-lib/src/model/mod.rs",
+    "crates/mementor-lib/src/model/transcript.rs",
+    "history/2026-02-26_phase1-data-layer.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "0f265945e68e",
+  "token_usage": {
+    "input_tokens": 263,
+    "cache_creation_tokens": 544204,
+    "cache_read_tokens": 10403576,
+    "output_tokens": 25447,
+    "api_call_count": 108
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-25T15:38:29.407728Z",
+    "agent_lines": 1596,
+    "human_added": 97,
+    "human_modified": 16,
+    "human_removed": 0,
+    "total_committed": 1709,
+    "agent_percentage": 93.38794616734933
+  },
+  "transcript_path": ".claude/projects/-Users-heejoon-kang-dev-git-fenv-org-mementor-agent1/81b5b775-82cd-4a78-a978-0dc8b7b2f53e.jsonl"
+}
