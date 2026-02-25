@@ -2,98 +2,73 @@
 
 ## Project Overview
 
-Mementor is a local RAG memory agent for Claude Code. It vectorizes
-conversation transcripts into a local SQLite vector database and automatically
-recalls relevant past context via Claude Code lifecycle hooks. The goal is
-cross-session context persistence without any external API dependencies.
+Mementor is a TUI workspace tool and Claude Code knowledge mining plugin. It
+reads entire-cli checkpoint data from a local git branch, provides a terminal
+UI for browsing past conversations, and exposes a Claude Code plugin for
+automatic context recall. The goal is cross-session context persistence with
+zero external API dependencies.
 
 ## Tech Stack
 
 - **Language**: Rust, edition 2024 (resolver 3)
 - **Toolchain**: Rust 1.93.1 (managed via mise, see `mise.toml`)
-- **Database**: SQLite via `rusqlite` with the `bundled` feature (statically
-  linked SQLite)
-- **Vector search**: sqlite-vector -- uses **BLOB columns and custom SQL
-  functions** (`vector_distance_cos`, etc.), **NOT virtual tables**. The C
-  sources live in `vendor/sqlite-vector/` and are statically compiled via the
-  `cc` crate in `build.rs`.
-- **Embedding**: `fastembed-rs` with GTE multilingual base int8 ONNX model
-  (768 dimensions). Model files are loaded from disk at runtime
-  (`~/.mementor/models/gte-multilingual-base/`).
-- **Text splitting**: `text-splitter` crate with `MarkdownSplitter`
-- **Schema migration**: Snapshot-first with `include_str!` + SQLite
-  `user_version` pragma. DDL files live in `crates/mementor-lib/ddl/`.
-  Run `mise run schema:dump` to regenerate the snapshot from migrations.
+- **TUI**: `ratatui` with `crossterm` backend
+- **Async runtime**: `tokio` (process spawning, sync primitives)
+- **Time**: `jiff` for timestamp parsing and display
+- **CLI**: `clap` with derive macros
+- **Serialization**: `serde` + `serde_json`
 - **Error handling**: `anyhow`
-- **Logging**: `tracing`
-- **CLI**: `clap`
+- **Logging**: `tracing` + `tracing-subscriber`
 
 ## Constraints
 
-- **Static linking required**: All native dependencies (SQLite, sqlite-vector)
-  must be statically linked. No runtime shared library dependencies.
-- **No external API dependencies at runtime**: Embedding, search, and all
-  other operations run locally with no network calls. The only network access
-  is the one-time `mementor model download` command, which fetches the ONNX
-  model from Hugging Face Hub.
-- **macOS only (Milestone 1)**: Target Apple Silicon (ARM64) and Intel (x86_64)
-  Macs. Do not add Linux or Windows-specific code yet.
+- **No external API dependencies at runtime**: All operations run locally with
+  no network calls.
+- **macOS only (Milestone 1)**: Target Apple Silicon (ARM64). Do not add Linux
+  or Windows-specific code yet.
+- **No native C dependencies**: No build.rs, no cc crate, no vendor/ directory.
+  Pure Rust dependencies only.
 
 ## Directory Structure
 
 ```
 mementor/
-  Cargo.toml              Workspace root (members: crates/*)
+  Cargo.toml              Workspace root (3 members)
   mise.toml               Rust toolchain version
-  AGENTS.md               This file (symlinked as CLAUDE.md)
+  CLAUDE.md               Agent instructions (this file)
   README.md               Project README
 
   crates/
     mementor-lib/         Core library
-      src/lib.rs          Library root
-      build.rs            Compiles sqlite-vector C sources via cc
-      ddl/
-        schema.sql        Complete DDL snapshot for current schema
-        migrations/       Incremental migration SQL files
-    mementor-cli/         CLI layer with DI
-      src/lib.rs          CLI command dispatch
+      src/
+        lib.rs            Library root
+        context.rs        Project context (paths, worktree info)
+        git/              Git operations
+          mod.rs          Module root + re-exports
+          worktree.rs     Git worktree detection
+    mementor-tui/         TUI application (was mementor-cli)
+      src/
+        lib.rs            Library root
+        app.rs            Application stub
     mementor-main/        Thin binary entry point
-      src/main.rs         main() -- wires DI, calls CLI
-    mementor-schema-gen/  Schema snapshot generator (generates schema.sql)
-    mementor-test-util/   Shared test utilities (dev-dependency only)
-
-  vendor/
-    sqlite-vector/
-      src/                C source files
-      libs/fp16/          FP16 support headers
+      src/main.rs         main() — resolves worktree, launches TUI
 
   history/                Task documents (one per session/milestone)
+  docs/                   Coding conventions and patterns
   scripts/                Build and utility scripts
 ```
 
 ### Crate Responsibilities
 
-- **mementor-lib**: All business logic. Database schema and operations,
-  embedding pipeline, transcript parsing, turn grouping, text chunking, vector
-  search. Defines DI traits (`MementorContext`, `ConsoleIO<IN, OUT, ERR>`).
-  No direct CLI or I/O concerns.
+- **mementor-lib**: Core library. Git operations (worktree detection, branch
+  reading), data types, context management. No TUI or CLI concerns.
 
-- **mementor-cli**: CLI command implementations using `clap`. Each command
-  accepts trait objects from mementor-lib for testability. Handles argument
-  parsing, output formatting, and command dispatch.
+- **mementor-tui**: TUI application using ratatui + crossterm. CLI argument
+  parsing with clap, terminal UI rendering, event loop, views and widgets.
 
-- **mementor-main**: The `[[bin]]` crate (binary name: `mementor`). Constructs
-  real implementations of all traits and passes them to mementor-cli. Should
-  contain minimal logic -- just wiring.
-
-- **mementor-schema-gen**: Schema snapshot generator. Applies all migration
-  files to an in-memory DB and writes the resulting DDL to
-  `crates/mementor-lib/ddl/schema.sql`. Also validates that the snapshot is up
-  to date via the `migrations_match_snapshot` test.
-
-- **mementor-test-util**: Shared test helpers used by multiple crates. Git
-  repository helpers (`init_git_repo`, `run_git`), path assertion utilities
-  (`assert_paths_eq`). Has no mementor dependencies. Dev-dependency only.
+- **mementor-main**: The `[[bin]]` crate (binary name: `mementor`). Resolves
+  git worktree, constructs context, and delegates to mementor-tui. Minimal
+  wiring logic only.
 
 ## Git Worktree
 
@@ -113,122 +88,13 @@ is handled correctly.
 cargo build
 ```
 
-The `build.rs` in mementor-lib automatically compiles the sqlite-vector C
-sources from `vendor/sqlite-vector/src/` using the `cc` crate. No manual steps
-are needed.
+No special build steps required. All dependencies are pure Rust.
 
 For a release build:
 
 ```bash
 cargo build --release
 ```
-
-### ONNX Model
-
-The GTE multilingual base int8 ONNX model is loaded from disk at runtime.
-Model files must be downloaded before first use:
-
-```bash
-mise run model:download
-```
-
-This runs `mementor model download`, which fetches model files from Hugging
-Face Hub to `~/.mementor/models/gte-multilingual-base/`. The download location
-can be overridden via the `MEMENTOR_MODEL_DIR` environment variable.
-
-### ONNX Runtime on x86_64 macOS (Intel Mac)
-
-`ort-sys` (the ONNX Runtime binding used by `fastembed`) does **not** provide
-prebuilt static binaries for `x86_64-apple-darwin`. Microsoft dropped x86_64
-macOS binaries starting with ONNX Runtime 1.24.1 (only `aarch64-apple-darwin`
-is supported).
-
-**Platform-specific handling**: The fastembed dependency uses target-specific
-features in `crates/mementor-lib/Cargo.toml`:
-
-- **Apple Silicon** (aarch64): `ort-download-binaries` — statically links a
-  prebuilt ONNX Runtime binary. No runtime dependency needed.
-- **Intel Mac** (x86_64): `ort-load-dynamic` — loads `libonnxruntime.dylib` at
-  runtime via `dlopen`. Requires Homebrew installation.
-
-**Setup** (required on Intel Macs only):
-
-```bash
-brew install onnxruntime
-```
-
-The `ORT_DYLIB_PATH` environment variable is configured in `mise.local.toml`
-(gitignored, machine-local). If you're on an Intel Mac and the file doesn't
-exist, create it:
-
-```toml
-# mise.local.toml
-[env]
-ORT_DYLIB_PATH = "/usr/local/lib/libonnxruntime.dylib"
-```
-
-**Do NOT** add `ort-download-binaries` to the x86_64 target — prebuilt
-binaries do not exist for `x86_64-apple-darwin` and the build will fail.
-
-## sqlite-vector Integration
-
-sqlite-vector (v0.9.90) provides vector operations via **custom SQL functions**
-and a **`vector_full_scan` virtual table** for similarity search.
-
-Key points:
-- Vector data is stored as BLOB in regular SQLite columns using
-  `vector_as_f32(json_text)` for conversion.
-- After schema creation, call `vector_init('table', 'column', 'type=f32,
-  dimension=768, distance=cosine')` to register the table with the extension.
-  This must be done on every new connection.
-- Similarity search uses the `vector_full_scan` virtual table:
-  ```sql
-  SELECT vs.id, vs.distance
-  FROM vector_full_scan('memories', 'embedding', ?query_json, ?k) vs
-  JOIN memories m ON m.rowid = vs.id
-  ```
-  Arguments: `(table_name TEXT, column_name TEXT, query_vector TEXT, k INTEGER)`.
-- The extension (`sqlite3_vector_init`) must be loaded via FFI into each
-  `rusqlite` connection after opening.
-- The C sources are compiled to a static library and linked at build time.
-- On x86_64 macOS, AVX2/AVX512 distance functions are stubbed to fall back to
-  SSE2 due to Apple Clang compile-time constant initializer limitations.
-
-## Incremental Update Pattern
-
-Mementor tracks ingestion progress per transcript file using two values:
-
-- **`last_line_index`**: The line number (0-based) of the last successfully
-  processed line in the transcript JSONL file. On the next ingestion, reading
-  starts from `last_line_index + 1`.
-- **`provisional_turn_start`**: The line index where the current incomplete
-  (provisional) turn begins. If a transcript ends mid-conversation, the
-  incomplete turn is stored provisionally. On the next ingestion, the
-  provisional turn is deleted and re-processed with the now-complete data.
-
-This ensures:
-- No duplicate processing of already-ingested content.
-- Incomplete turns are properly completed on subsequent ingestion passes.
-- The system is resilient to interruptions.
-
-## Turn-Based Chunking
-
-A **Turn** groups consecutive messages for semantic coherence:
-
-```
-Turn[n] = User[n] + Assistant[n] + User[n+1]
-```
-
-- `User[n]`: The user's prompt.
-- `Assistant[n]`: The assistant's response.
-- `User[n+1]`: The next user prompt, included as **forward context**. This
-  provides a hint about what the assistant's response was really addressing,
-  improving embedding quality.
-
-When a turn exceeds the model's token limit, it is split into sub-chunks using
-`MarkdownSplitter`. Adjacent sub-chunks within the same turn share **~40 tokens
-(~15%) overlap** via post-processing to preserve semantic continuity at split
-boundaries.
 
 ## Coding Conventions
 
