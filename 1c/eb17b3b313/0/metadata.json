@@ -1,0 +1,36 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "1ceb17b3b313",
+  "session_id": "279d5bb7-ef37-4a47-b286-ffeba843c7b5",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-25T16:34:52.462724Z",
+  "branch": "phase2-tui-checkpoint-list",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "crates/mementor-tui/src/app.rs",
+    "crates/mementor-tui/src/lib.rs",
+    "crates/mementor-tui/src/views/branch_popup.rs",
+    "crates/mementor-tui/src/views/dashboard.rs",
+    "crates/mementor-tui/src/views/mod.rs",
+    "crates/mementor-tui/src/views/status_bar.rs",
+    "history/2026-02-26_phase2-tui-checkpoint-list.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "712e5bd90d79",
+  "token_usage": {
+    "input_tokens": 35,
+    "cache_creation_tokens": 85493,
+    "cache_read_tokens": 1448582,
+    "output_tokens": 7093,
+    "api_call_count": 30
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-25T16:34:52.276068Z",
+    "agent_lines": 450,
+    "human_added": 133,
+    "human_modified": 15,
+    "human_removed": 0,
+    "total_committed": 598,
+    "agent_percentage": 75.25083612040135
+  }
+}

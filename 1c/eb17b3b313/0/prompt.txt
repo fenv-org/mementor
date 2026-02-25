@@ -1,0 +1,150 @@
+<teammate-message teammate_id="team-lead">
+You are "tui-agent", a teammate on the "phase2-tui" team. Your task is to implement the TUI application shell and checkpoint list view.
+
+## Your Task
+
+Read task #1 from TaskList for full details. Claim it with TaskUpdate (set owner to "tui-agent", status to "in_progress").
+
+## Context
+
+You're working in a Rust workspace. The TUI crate is at `crates/mementor-tui/`. 
+
+Current state:
+- `crates/mementor-tui/src/lib.rs` — stub: `pub mod app;`
+- `crates/mementor-tui/src/app.rs` — stub: `// TODO: Phase 2`
+- `crates/mementor-tui/Cargo.toml` — has ratatui 0.29 (crossterm backend), crossterm 0.28, clap 4, tokio 1, anyhow 1, tracing 0.1, tracing-subscriber 0.3, mementor-lib
+
+Available from mementor-lib:
+- `mementor_lib::cache::DataCache` — `initialize(branch)`, `checkpoints()`, `commits()`, `transcript()`, `diffs()`, `refresh()`
+- `mementor_lib::model::CheckpointMeta` — checkpoint_id, strategy, branch, files_touched, sessions (Vec<SessionMeta>), token_usage, commit_hashes
+- `mementor_lib::model::SessionMeta` — session_id, created_at, agent, token_usage, initial_attribution, blob_path
+- `mementor_lib::model::TokenUsage` — input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, api_call_count
+- `mementor_lib::git::log::CommitInfo` — hash, short_hash, subject, author, date, checkpoint_id
+- `mementor_lib::git::branch::{list_branches, current_branch}`
+
+## What to implement
+
+### 1. Add `futures` dependency
+Run: `cargo add -p mementor-tui futures`
+
+### 2. `src/app.rs` — Application core
+
+```rust
+use std::io::Stdout;
+use anyhow::Result;
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
+use crossterm::execute;
+use ratatui::backend::CrosstermBackend;
+use ratatui::Terminal;
+use ratatui::prelude::*;
+use mementor_lib::cache::DataCache;
+
+pub enum View {
+    CheckpointList,
+    // Future phases will add more views
+}
+
+pub struct App {
+    pub view: View,
+    pub cache: DataCache,
+    pub list_state: ratatui::widgets::ListState,
+    pub selected_branch: String,
+    pub running: bool,
+    pub branch_popup_open: bool,
+    pub branches: Vec<String>,
+    pub branch_list_state: ratatui::widgets::ListState,
+}
+```
+
+- `App::new(cache: DataCache, branch: String) -> Self`
+- `pub async fn run(&mut self, terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()>` — event loop
+- `pub fn setup_terminal() -> Result<Terminal<CrosstermBackend<Stdout>>>` — raw mode + alternate screen
+- `pub fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()>` — cleanup
+
+Event loop pattern:
+```rust
+loop {
+    terminal.draw(|frame| self.render(frame))?;
+    
+    if event::poll(std::time::Duration::from_millis(100))? {
+        if let Event::Key(key) = event::read()? {
+            self.handle_key(key).await;
+        }
+    }
+    
+    if !self.running {
+        break;
+    }
+}
+```
+
+Use synchronous crossterm events (simpler for Phase 2 — async EventStream can be added later when background tasks are needed).
+
+Key handling:
+- If branch_popup_open: delegate to branch popup handler
+- Else: delegate to current view handler
+- Global: `q` quits, `Ctrl-c` quits
+
+### 3. `src/views/mod.rs`
+```rust
+pub mod branch_popup;
+pub mod dashboard;
+pub mod status_bar;
+```
+
+### 4. `src/views/dashboard.rs` — Checkpoint list
+- `pub fn render(frame: &mut Frame, area: Rect, app: &App)` — render checkpoint list
+- Create list items from `app.cache.checkpoints()`
+- Each item: 2 lines
+  - Line 1: First commit subject (from commit_hashes → find matching CommitInfo, or use checkpoint_id as fallback)
+  - Line 2: `  {short_hash}  {relative_time}  {agent}  +{additions}/-{deletions}  {files_touched.len()} files  {total_tokens}K tok`
+- For relative time: parse the first session's `created_at` ISO timestamp. Simple approach: just show the date string or do basic "Xh ago" / "Xd ago" calculation
+- For tokens: `(token_usage.input_tokens + token_usage.output_tokens) / 1000` formatted as "12.3K tok"
+- Selected item should be highlighted (use `Style::default().bg(Color::DarkGray)`)
+- Handle keys: j/Down moves down, k/Up moves up, Enter would switch view (just set view for now), b opens branch popup, r calls refresh, q quits
+
+### 5. `src/views/status_bar.rs`
+- `pub fn render(frame: &mut Frame, area: Rect, app: &App)` 
+- Single line: styled spans for key hints
+- "j/k Navigate  Enter Detail  b Branch  / Search  g Git log  q Quit"
+- Keys in one color (e.g., Color::Yellow), descriptions in default
+
+### 6. `src/views/branch_popup.rs`
+- `pub fn render(frame: &mut Frame, area: Rect, app: &App)` — centered popup overlay
+- Use `ratatui::widgets::Clear` to clear the popup area, then draw a bordered Block with a List of branches
+- `pub async fn handle_key(key: KeyEvent, app: &mut App)` — j/k navigate, Enter selects and closes, Esc closes
+- Popup should be ~40% width, ~50% height, centered
+
+### 7. Update `src/lib.rs`
+```rust
+pub mod app;
+pub mod views;
+```
+
+## Important
+- Read `docs/rust-coding-conventions.md` for project conventions
+- Read `crates/mementor-tui/Cargo.toml` to see available dependencies
+- Read `crates/mementor-lib/src/cache.rs` for the DataCache API
+- Read `crates/mementor-lib/src/model/checkpoint.rs` for CheckpointMeta fields
+- Read `crates/mementor-lib/src/git/log.rs` for CommitInfo struct
+- `cargo clippy -- -D warnings` must pass (pedantic enabled)
+- `cargo fmt` must pass
+- After implementation, run `cargo check` and `cargo clippy -- -D warnings`
+
+## When done
+- Mark task #1 as completed
+- Send a message to "team-lead" summarizing what you implemented and the public API
+</teammate-message>
+
+---
+
+<teammate-message teammate_id="tui-agent" color="blue">
+{"type":"task_assignment","taskId":"1","subject":"Implement TUI app shell, views, and checkpoint list","description":"Implement the TUI application in crates/mementor-tui/:\n\n### app.rs — Application core\n- `App` struct with fields: `view: View`, `cache: DataCache`, `checkpoint_list_state: ListState`, `selected_branch: String`, `running: bool`, `branch_popup_open: bool`, `branches: Vec<String>`\n- `View` enum: `CheckpointList`, `CheckpointDetail(String)`, `Transcript(String)`, `Diff(String)`, `GitLog`, `Search`\n- `pub async fn run(&mut self, terminal: &mut Terminal<impl Backend>) -> Result<()>` — main event loop using `crossterm::event::EventStream` + `tokio::select!`\n- `pub fn setup_terminal() -> Result<Terminal<CrosstermBackend<Stdout>>>` — enable raw mode, alternate screen, mouse capture\n- `pub fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()>` — restore terminal state\n- Handle key events: dispatch to current view handler, global keys (q to quit)\n- Handle terminal resize events\n\n### views/mod.rs\n- Export dashboard, status_bar, branch_popup modules\n\n### views/dashboard.rs — Checkpoint list view\n- Render a scrollable list of checkpoint cards (full-width)\n- Each card is 2 lines:\n  - Line 1: commit subject (bold/highlighted when selected)\n  - Line 2: short_hash, relative time (from created_at in first session), agent badge, +/-stats (from files_touched.len()), token count (from token_usage)\n- Use ratatui `List` widget with `ListState` for selection\n- Selected item highlighted with a different style\n- Key bindings: j/k/↑/↓ move selection, Enter opens detail (sets view to CheckpointDetail), b opens branch popup, / focuses search (placeholder), g switches to GitLog (placeholder), r refreshes cache, q quits\n\n### views/status_bar.rs\n- Render a single-line bar at the bottom with key hints\n- Format: \"j/k Navigate  Enter Detail  b Branch  / Search  g Git log  q Quit\"\n- Use ratatui `Paragraph` with styled spans\n\n### views/branch_popup.rs\n- Modal popup rendered on top of the dashboard\n- Show list of branches (from `git::branch::list_branches()`, excludes entire/*)\n- j/k to navigate, Enter to select (updates selected_branch, closes popup), Esc to cancel\n- Use ratatui `Clear` + `Block` + `List` for the popup overlay\n\n### lib.rs\n- Export `app` module and `views` module\n- Re-export `App` and setup/restore functions for use by mementor-main\n\n### Important notes\n- Use `crossterm::event::EventStream` with `futures::StreamExt` for async event polling — add `futures` to Cargo.toml if needed\n- Use `tokio::select!` to multiplex terminal events with potential background task results\n- For relative time display, compute from the checkpoint's first session created_at timestamp. Simple approach: parse ISO timestamp, compute duration from now. Can use `jiff` from mementor-lib or a simple manual calculation.\n- The DataCache is in mementor-lib, use `mementor_lib::cache::DataCache`\n- Token count display: format as \"12.3K tok\" (divide by 1000)\n- For Phase 2, detail/transcript/diff/search views are stubs (just render \"TODO\" text)\n\n### Conventions\n- Rust edition 2024\n- `cargo clippy -- -D warnings` must pass (pedantic enabled)\n- `cargo fmt` must pass\n- Allowed clippy lints: module_name_repetitions, must_use_candidate, missing_errors_doc, missing_panics_doc\n- Follow docs/rust-coding-conventions.md","assignedBy":"tui-agent","timestamp":"2026-02-25T16:30:04.714Z"}
+</teammate-message>
+
+---
+
+<teammate-message teammate_id="team-lead">
+{"type":"shutdown_request","requestId":"shutdown-1772037250791@tui-agent","from":"team-lead","reason":"All tasks complete. Shutting down.","timestamp":"2026-02-25T16:34:10.791Z"}
+</teammate-message>
