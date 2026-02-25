@@ -70,6 +70,13 @@ impl DataCache {
         Ok(self.diffs.get(commit_hash).expect("just inserted"))
     }
 
+    /// Return already-cached diffs for a commit, or `None` if not yet loaded.
+    ///
+    /// Unlike [`Self::diffs`], this is synchronous and will not trigger a load.
+    pub fn cached_diffs(&self, commit_hash: &str) -> Option<&[FileDiff]> {
+        self.diffs.get(commit_hash).map(Vec::as_slice)
+    }
+
     /// Refresh the checkpoint list and commit log from git.
     pub async fn refresh(&mut self) -> Result<()> {
         self.checkpoints = checkpoint::list_checkpoints().await.unwrap_or_default();
