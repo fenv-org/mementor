@@ -1,0 +1,68 @@
+<teammate-message teammate_id="team-lead">
+You are "git-agent", a teammate on the "phase1-data-layer" team. Your task is to implement four git modules in the mementor-lib crate.
+
+## Your Task
+
+Read task #1 from TaskList for full details. Claim it with TaskUpdate (set owner to "git-agent", status to "in_progress").
+
+## Context
+
+You're working in a Rust workspace. The crate is at `crates/mementor-lib/`. The foundation is already set up:
+- `src/git/command.rs` has async `git()`, `git_in()`, `git_bytes()` functions
+- `src/model/checkpoint.rs` has `CheckpointMeta`, `SessionMeta`, `TokenUsage`, `Attribution` types
+- `src/model/transcript.rs` has `TranscriptEntry`, `TranscriptMessage`, `ContentBlock`, `MessageRole`, `ConversationSegment` types
+- Stub files exist at `src/git/tree.rs`, `src/git/log.rs`, `src/git/diff.rs`, `src/git/branch.rs`
+
+## What to implement
+
+Replace the stub files with full implementations:
+
+### git/tree.rs
+- `TreeEntry` struct with `name`, `object_type` (enum `ObjectType { Blob, Tree }`), `hash`
+- `pub async fn ls_tree(branch: &str, path: &str) -> Result<Vec<TreeEntry>>` 
+- `pub async fn show_blob(branch: &str, path: &str) -> Result<Vec<u8>>`
+- `pub async fn show_blob_str(branch: &str, path: &str) -> Result<String>`
+- Parse `git ls-tree` output format: `<mode> <type> <hash>\t<name>`
+- Unit tests: extract parsing into a `parse_ls_tree_line()` fn and test with fixture strings
+
+### git/log.rs
+- `CommitInfo` struct: `hash, short_hash, subject, author, date, checkpoint_id: Option<String>`
+- `pub async fn log_with_checkpoints(branch: &str, limit: usize) -> Result<Vec<CommitInfo>>`
+- Use git log format to extract `Entire-Checkpoint` trailer
+- Suggested format: `--format=%H%n%h%n%s%n%an%n%ai%n%(trailers:key=Entire-Checkpoint,valueonly,separator=%x2C)%n---`
+- Unit tests: test the parsing function with fixture git log output
+
+### git/diff.rs
+- `FileStatus` enum: `Added, Modified, Deleted, Renamed`
+- `DiffHunk` struct: `header: String, lines: Vec<DiffLine>`
+- `DiffLine` enum: `Context(String), Added(String), Removed(String)`
+- `FileDiff` struct: `path, status: FileStatus, additions: usize, deletions: usize, hunks: Vec<DiffHunk>`
+- `pub async fn diff_commit(hash: &str) -> Result<Vec<FileDiff>>`
+- Parse unified diff output from `git diff-tree -p <hash>`
+- Unit tests: test parsing with fixture diff output
+
+### git/branch.rs
+- `pub async fn list_branches() -> Result<Vec<String>>` — exclude `entire/*` branches
+- `pub async fn current_branch() -> Result<String>`
+- Unit tests
+
+## Important conventions
+- Rust edition 2024, `anyhow::Result`, `tracing` for logging
+- Extract parsing logic into separate non-async functions for testability
+- `cargo clippy -- -D warnings` must pass (pedantic enabled, see workspace Cargo.toml)
+- `cargo fmt` must pass
+- Allowed clippy lints: `module_name_repetitions`, `must_use_candidate`, `missing_errors_doc`, `missing_panics_doc`
+- Follow `docs/rust-coding-conventions.md` conventions
+
+## When done
+- Run `cargo check` and `cargo clippy -- -D warnings` to verify
+- Run `cargo test --lib -p mementor-lib` for your tests
+- Mark task #1 as completed via TaskUpdate
+- Send a message to "team-lead" summarizing what you implemented
+</teammate-message>
+
+---
+
+<teammate-message teammate_id="git-agent" color="blue">
+{"type":"task_assignment","taskId":"1","subject":"Implement git/tree.rs, git/log.rs, git/diff.rs, git/branch.rs","description":"Implement four git modules in crates/mementor-lib/src/git/:\n\n1. **git/tree.rs** — Read blobs from checkpoint branch:\n   - `pub async fn ls_tree(branch: &str, path: &str) -> Result<Vec<TreeEntry>>` — list entries under a path on a branch using `git ls-tree`\n   - `pub async fn show_blob(branch: &str, path: &str) -> Result<Vec<u8>>` — read a blob as bytes using `git show`\n   - `pub async fn show_blob_str(branch: &str, path: &str) -> Result<String>` — read a blob as String\n   - `TreeEntry` struct: `name: String, object_type: ObjectType, hash: String` where ObjectType is `{Blob, Tree}`\n\n2. **git/log.rs** — Commit log with trailer extraction:\n   - `CommitInfo` struct: `hash, short_hash, subject, author, date, checkpoint_id: Option<String>`\n   - `pub async fn log_with_checkpoints(branch: &str, limit: usize) -> Result<Vec<CommitInfo>>` — git log with `Entire-Checkpoint` trailer extraction via format string\n\n3. **git/diff.rs** — File diffs:\n   - `FileDiff` struct: `path, status: FileStatus, additions, deletions, hunks: Vec<DiffHunk>`\n   - `FileStatus` enum: `Added, Modified, Deleted, Renamed`\n   - `DiffHunk` struct: `header: String, lines: Vec<DiffLine>`\n   - `DiffLine` enum: `Context(String), Added(String), Removed(String)`\n   - `pub async fn diff_commit(hash: &str) -> Result<Vec<FileDiff>>` — parse `git diff` output for a commit\n\n4. **git/branch.rs** — Branch listing:\n   - `pub async fn list_branches() -> Result<Vec<String>>` — list branches, excluding `entire/*` internal branches\n   - `pub async fn current_branch() -> Result<String>` — current branch name via `git rev-parse --abbrev-ref HEAD`\n\nAll functions use `crate::git::command::{git, git_bytes}` for running git commands. Use `anyhow::Result`. Include unit tests with fixture data (mock git output strings parsed by the parsing functions). Extract parsing into separate non-async functions for testability.\n\nProject conventions:\n- Rust edition 2024\n- `cargo clippy -- -D warnings` must pass (pedantic enabled)\n- `cargo fmt` must pass\n- Follow conventions in docs/rust-coding-conventions.md (derive Default where possible, new() delegates to default())","assignedBy":"git-agent","timestamp":"2026-02-25T15:31:36.976Z"}
+</teammate-message>

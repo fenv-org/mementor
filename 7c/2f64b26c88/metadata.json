@@ -1,0 +1,39 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "7c2f64b26c88",
+  "strategy": "manual-commit",
+  "branch": "phase1-data-layer",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "crates/mementor-lib/src/cache.rs",
+    "crates/mementor-lib/src/entire/checkpoint.rs",
+    "crates/mementor-lib/src/entire/cli.rs",
+    "crates/mementor-lib/src/entire/mod.rs",
+    "crates/mementor-lib/src/entire/transcript.rs",
+    "crates/mementor-lib/src/git/branch.rs",
+    "crates/mementor-lib/src/git/command.rs",
+    "crates/mementor-lib/src/git/diff.rs",
+    "crates/mementor-lib/src/git/log.rs",
+    "crates/mementor-lib/src/git/tree.rs",
+    "crates/mementor-lib/src/model/checkpoint.rs",
+    "crates/mementor-lib/src/model/mod.rs",
+    "crates/mementor-lib/src/model/transcript.rs",
+    "history/2026-02-26_phase1-data-layer.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/7c/2f64b26c88/0/metadata.json",
+      "transcript": "/7c/2f64b26c88/0/full.jsonl",
+      "context": "/7c/2f64b26c88/0/context.md",
+      "content_hash": "/7c/2f64b26c88/0/content_hash.txt",
+      "prompt": "/7c/2f64b26c88/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 22,
+    "cache_creation_tokens": 99646,
+    "cache_read_tokens": 799596,
+    "output_tokens": 689,
+    "api_call_count": 18
+  }
+}
