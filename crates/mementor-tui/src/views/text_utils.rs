@@ -73,6 +73,36 @@ pub fn wrap_str(s: &str, width: usize) -> Vec<String> {
     result
 }
 
+/// Format an ISO 8601 timestamp as a relative time string (e.g., "2h ago").
+///
+/// Falls back to the raw string on parse failure.
+pub fn format_relative_time(iso_str: &str) -> String {
+    let Ok(timestamp) = iso_str.parse::<jiff::Timestamp>() else {
+        return iso_str.to_owned();
+    };
+    let now = jiff::Timestamp::now();
+    let Ok(span) = timestamp.until(now) else {
+        return iso_str.to_owned();
+    };
+
+    let total_seconds = span.get_seconds();
+    let hours = total_seconds / 3600;
+    let days = hours / 24;
+
+    if days > 0 {
+        format!("{days}d ago")
+    } else if hours > 0 {
+        format!("{hours}h ago")
+    } else {
+        let mins = total_seconds / 60;
+        if mins > 0 {
+            format!("{mins}m ago")
+        } else {
+            "just now".to_owned()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

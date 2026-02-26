@@ -72,6 +72,13 @@ impl DataCache {
         Ok(self.diffs.get(commit_hash).expect("just inserted"))
     }
 
+    /// Return already-cached transcript, or `None` if not yet loaded.
+    ///
+    /// Unlike [`Self::transcript`], this is synchronous and will not trigger a load.
+    pub fn cached_transcript(&self, blob_path: &str) -> Option<&[TranscriptEntry]> {
+        self.transcripts.get(blob_path).map(Vec::as_slice)
+    }
+
     /// Return already-cached diffs for a commit, or `None` if not yet loaded.
     ///
     /// Unlike [`Self::diffs`], this is synchronous and will not trigger a load.
@@ -97,6 +104,23 @@ fn link_commit_hashes(checkpoints: &mut [CheckpointMeta], commits: &[CommitInfo]
             && let Some(cp) = checkpoints.iter_mut().find(|c| &c.checkpoint_id == cp_id)
         {
             cp.commit_hashes.push(commit.hash.clone());
+        }
+    }
+}
+
+#[cfg(test)]
+impl DataCache {
+    pub fn new_for_test(
+        checkpoints: Vec<CheckpointMeta>,
+        commits: Vec<CommitInfo>,
+        transcripts: HashMap<String, Vec<TranscriptEntry>>,
+    ) -> Self {
+        Self {
+            checkpoints,
+            commits,
+            transcripts,
+            diffs: HashMap::new(),
+            branch: String::new(),
         }
     }
 }

@@ -94,31 +94,5 @@ fn format_tokens(total: u64) -> String {
 }
 
 fn format_relative_time(iso_str: &str) -> String {
-    // Parse ISO 8601 timestamp and compute relative time.
-    // Use jiff for parsing, falling back to raw string on failure.
-    let Ok(timestamp) = iso_str.parse::<jiff::Timestamp>() else {
-        return iso_str.to_owned();
-    };
-    let now = jiff::Timestamp::now();
-    let span = timestamp.until(now);
-    let Ok(span) = span else {
-        return iso_str.to_owned();
-    };
-
-    let total_seconds = span.get_seconds();
-    let hours = total_seconds / 3600;
-    let days = hours / 24;
-
-    if days > 0 {
-        format!("{days}d ago")
-    } else if hours > 0 {
-        format!("{hours}h ago")
-    } else {
-        let mins = total_seconds / 60;
-        if mins > 0 {
-            format!("{mins}m ago")
-        } else {
-            "just now".to_owned()
-        }
-    }
+    super::text_utils::format_relative_time(iso_str)
 }

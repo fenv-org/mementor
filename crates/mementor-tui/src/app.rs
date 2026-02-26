@@ -14,7 +14,9 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::prelude::*;
 use ratatui::widgets::ListState;
 
-use crate::views::{branch_popup, dashboard, detail, diff_view, git_log, status_bar, transcript};
+use crate::views::{
+    branch_popup, dashboard, detail, diff_view, git_log, search, status_bar, transcript,
+};
 
 /// The active view in the application.
 pub enum View {
@@ -50,6 +52,10 @@ pub struct App {
 
     /// Cached transcript entries for the currently viewed checkpoint session.
     pub loaded_transcript: Option<Vec<TranscriptEntry>>,
+
+    // Search overlay.
+    pub search_open: bool,
+    pub search_state: search::SearchOverlayState,
 }
 
 impl App {
@@ -72,6 +78,8 @@ impl App {
             diff_state: diff_view::DiffViewState::new(),
             git_log_state: git_log::GitLogState::new(),
             loaded_transcript: None,
+            search_open: false,
+            search_state: search::SearchOverlayState::new(),
         }
     }
 
@@ -157,7 +165,9 @@ impl App {
         }
         status_bar::render(frame, chunks[1], self);
 
-        if self.branch_popup_open {
+        if self.search_open {
+            search::render(frame, area, &mut self.search_state);
+        } else if self.branch_popup_open {
             branch_popup::render(frame, area, self);
         }
     }
@@ -166,6 +176,12 @@ impl App {
         // Ctrl-c always quits.
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             self.running = false;
+            return;
+        }
+
+        if self.search_open {
+            let action = search::handle_key(key, &mut self.search_state);
+            self.handle_search_action(action).await;
             return;
         }
 
@@ -206,6 +222,7 @@ impl App {
                 let _ = self.cache.refresh().await;
                 self.clamp_selection();
             }
+            KeyCode::Char('/') => self.open_search().await,
             KeyCode::Char('g') => {
                 self.git_log_state.reset(self.cache.commits().len());
                 self.view = View::GitLog;
@@ -341,6 +358,79 @@ impl App {
             return;
         }
         self.loaded_transcript = None;
+    }
+
+    async fn open_search(&mut self) {
+        self.search_state.reset();
+        // Pre-load all transcripts so search can scan them synchronously.
+        self.preload_all_transcripts().await;
+        self.search_open = true;
+    }
+
+    async fn handle_search_action(&mut self, action: search::SearchOverlayAction) {
+        match action {
+            search::SearchOverlayAction::Close => {
+                self.search_open = false;
+            }
+            search::SearchOverlayAction::OpenCheckpoint(idx) => {
+                self.search_open = false;
+                self.open_detail(idx).await;
+            }
+            search::SearchOverlayAction::QueryChanged
+            | search::SearchOverlayAction::ScopeChanged => {
+                self.run_search();
+            }
+            search::SearchOverlayAction::None => {}
+        }
+    }
+
+    fn run_search(&mut self) {
+        use crate::views::text_utils::format_relative_time;
+
+        let commits = self.cache.commits();
+        let matches = mementor_lib::search::search_transcripts(
+            &self.cache,
+            &self.search_state.input,
+            self.search_state.scope,
+            &self.selected_branch,
+            commits,
+        );
+
+        self.search_state.results = matches
+            .into_iter()
+            .map(|m| search::SearchMatchDisplay {
+                checkpoint_idx: m.checkpoint_idx,
+                checkpoint_id: m.checkpoint_id,
+                title: m.commit_subject.unwrap_or_else(|| "untitled".to_owned()),
+                time_ago: format_relative_time(&m.created_at),
+                snippet: m.matching_line,
+                match_count: m.match_count,
+            })
+            .collect();
+
+        // Reset selection to top.
+        self.search_state.selected = 0;
+        if self.search_state.results.is_empty() {
+            self.search_state.list_state.select(None);
+        } else {
+            self.search_state.list_state.select(Some(0));
+        }
+    }
+
+    async fn preload_all_transcripts(&mut self) {
+        let blob_paths: Vec<String> = self
+            .cache
+            .checkpoints()
+            .iter()
+            .flat_map(|cp| cp.sessions.iter())
+            .filter(|s| !s.blob_path.is_empty())
+            .map(|s| s.blob_path.clone())
+            .collect();
+
+        for path in &blob_paths {
+            // Load transcript if not already cached (ignoring errors).
+            let _ = self.cache.transcript(path).await;
+        }
     }
 
     fn select_next(&mut self) {

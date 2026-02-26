@@ -14,6 +14,8 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             Span::styled(" Navigate  ", desc_style),
             Span::styled("Enter", key_style),
             Span::styled(" Detail  ", desc_style),
+            Span::styled("/", key_style),
+            Span::styled(" Search  ", desc_style),
             Span::styled("b", key_style),
             Span::styled(" Branch  ", desc_style),
             Span::styled("g", key_style),
