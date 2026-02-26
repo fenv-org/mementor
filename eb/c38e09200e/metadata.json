@@ -5,7 +5,9 @@
   "branch": "phase4-search-polish",
   "checkpoints_count": 1,
   "files_touched": [
-    "crates/mementor-tui/src/views/search.rs"
+    "crates/mementor-tui/src/views/detail.rs",
+    "crates/mementor-tui/src/views/search.rs",
+    "crates/mementor-tui/src/views/transcript.rs"
   ],
   "sessions": [
     {
@@ -14,6 +16,20 @@
       "context": "",
       "content_hash": "/eb/c38e09200e/0/content_hash.txt",
       "prompt": ""
+    },
+    {
+      "metadata": "/eb/c38e09200e/1/metadata.json",
+      "transcript": "/eb/c38e09200e/1/full.jsonl",
+      "context": "/eb/c38e09200e/1/context.md",
+      "content_hash": "/eb/c38e09200e/1/content_hash.txt",
+      "prompt": "/eb/c38e09200e/1/prompt.txt"
     }
-  ]
+  ],
+  "token_usage": {
+    "input_tokens": 2487,
+    "cache_creation_tokens": 123952,
+    "cache_read_tokens": 2664457,
+    "output_tokens": 4979,
+    "api_call_count": 44
+  }
 }
