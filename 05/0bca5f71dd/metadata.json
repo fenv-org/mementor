@@ -5,7 +5,11 @@
   "branch": "phase4-search-polish",
   "checkpoints_count": 1,
   "files_touched": [
-    "crates/mementor-tui/src/views/search.rs"
+    "crates/mementor-lib/src/ai_search.rs",
+    "crates/mementor-lib/src/lib.rs",
+    "crates/mementor-tui/src/app.rs",
+    "crates/mementor-tui/src/views/search.rs",
+    "history/2026-02-26_agentic-ai-search.md"
   ],
   "sessions": [
     {
@@ -14,6 +18,20 @@
       "context": "",
       "content_hash": "/05/0bca5f71dd/0/content_hash.txt",
       "prompt": ""
+    },
+    {
+      "metadata": "/05/0bca5f71dd/1/metadata.json",
+      "transcript": "/05/0bca5f71dd/1/full.jsonl",
+      "context": "/05/0bca5f71dd/1/context.md",
+      "content_hash": "/05/0bca5f71dd/1/content_hash.txt",
+      "prompt": "/05/0bca5f71dd/1/prompt.txt"
     }
-  ]
+  ],
+  "token_usage": {
+    "input_tokens": 2487,
+    "cache_creation_tokens": 123952,
+    "cache_read_tokens": 2664457,
+    "output_tokens": 4979,
+    "api_call_count": 44
+  }
 }
