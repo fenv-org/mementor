@@ -383,3 +383,28 @@ mod tests {
         assert_eq!(lines[1], "字");
     }
 }
+
+/// Compute a centered `Rect` of the given `width` x `height` within `area`.
+pub fn centered_rect(
+    width: u16,
+    height: u16,
+    area: ratatui::prelude::Rect,
+) -> ratatui::prelude::Rect {
+    let x = area.x + (area.width.saturating_sub(width)) / 2;
+    let y = area.y + (area.height.saturating_sub(height)) / 2;
+    ratatui::prelude::Rect::new(x, y, width.min(area.width), height.min(area.height))
+}
+
+/// Format a token count as a human-readable string (e.g., "1.2M tok", "3.4K tok").
+#[allow(clippy::cast_precision_loss)]
+pub fn format_tokens(total: u64) -> String {
+    if total >= 1_000_000 {
+        let m = total as f64 / 1_000_000.0;
+        format!("{m:.1}M tok")
+    } else if total >= 1_000 {
+        let k = total as f64 / 1_000.0;
+        format!("{k:.1}K tok")
+    } else {
+        format!("{total} tok")
+    }
+}

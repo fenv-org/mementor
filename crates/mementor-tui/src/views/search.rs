@@ -35,13 +35,12 @@ pub struct SearchMatchDisplay {
 }
 
 /// State for the search overlay.
+#[derive(Default)]
 pub struct SearchOverlayState {
     /// Current search input text.
     pub input: String,
     /// Search results (updated when AI search completes).
     pub results: Vec<SearchMatchDisplay>,
-    /// Selected result index in the list.
-    pub selected: usize,
     /// List state for scrolling/selection.
     pub list_state: ListState,
     /// Whether an AI search is currently running.
@@ -54,30 +53,14 @@ pub struct SearchOverlayState {
     pub last_searched_query: Option<String>,
 }
 
-impl Default for SearchOverlayState {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl SearchOverlayState {
     pub fn new() -> Self {
-        Self {
-            input: String::new(),
-            results: Vec::new(),
-            selected: 0,
-            list_state: ListState::default(),
-            loading: false,
-            error: None,
-            elapsed_ticks: 0,
-            last_searched_query: None,
-        }
+        Self::default()
     }
 
     pub fn reset(&mut self) {
         self.input.clear();
         self.results.clear();
-        self.selected = 0;
         self.list_state.select(None);
         self.loading = false;
         self.error = None;
@@ -85,16 +68,16 @@ impl SearchOverlayState {
         self.last_searched_query = None;
     }
 
+    fn selected(&self) -> usize {
+        self.list_state.selected().unwrap_or(0)
+    }
+
     fn select_next(&mut self) {
-        if self.results.is_empty() {
+        let len = self.results.len();
+        if len == 0 {
             return;
         }
-        let next = if self.selected + 1 < self.results.len() {
-            self.selected + 1
-        } else {
-            self.selected
-        };
-        self.selected = next;
+        let next = (self.selected() + 1).min(len - 1);
         self.list_state.select(Some(next));
     }
 
@@ -102,8 +85,7 @@ impl SearchOverlayState {
         if self.results.is_empty() {
             return;
         }
-        let prev = self.selected.saturating_sub(1);
-        self.selected = prev;
+        let prev = self.selected().saturating_sub(1);
         self.list_state.select(Some(prev));
     }
 }
@@ -213,7 +195,6 @@ fn render_results(frame: &mut Frame, area: Rect, state: &mut SearchOverlayState)
     // Sync selection.
     if !state.results.is_empty() && state.list_state.selected().is_none() {
         state.list_state.select(Some(0));
-        state.selected = 0;
     }
 
     let max_width = area.width as usize;
@@ -339,7 +320,6 @@ pub fn handle_key(key: KeyEvent, state: &mut SearchOverlayState) -> SearchOverla
             }
             KeyCode::Char('u') => {
                 state.input.clear();
-                state.selected = 0;
                 state.list_state.select(None);
                 SearchOverlayAction::None
             }
@@ -353,7 +333,7 @@ pub fn handle_key(key: KeyEvent, state: &mut SearchOverlayState) -> SearchOverla
         KeyCode::Enter => {
             // If results exist, open the selected one.
             if !state.results.is_empty()
-                && let Some(result) = state.results.get(state.selected)
+                && let Some(result) = state.results.get(state.selected())
             {
                 if let Some(idx) = result.checkpoint_idx {
                     return SearchOverlayAction::OpenCheckpoint(idx);
@@ -405,9 +385,7 @@ pub fn handle_key(key: KeyEvent, state: &mut SearchOverlayState) -> SearchOverla
 // ---------------------------------------------------------------------------
 
 fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
-    let x = area.x + (area.width.saturating_sub(width)) / 2;
-    let y = area.y + (area.height.saturating_sub(height)) / 2;
-    Rect::new(x, y, width.min(area.width), height.min(area.height))
+    super::text_utils::centered_rect(width, height, area)
 }
 
 fn truncate(s: &str, max_width: usize) -> String {

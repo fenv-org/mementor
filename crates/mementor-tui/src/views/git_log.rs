@@ -6,22 +6,15 @@ use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
 use mementor_lib::git::log::CommitInfo;
 
 /// State for the git log view.
+#[derive(Default)]
 pub struct GitLogState {
     /// Selection state for the commit list.
     pub list_state: ListState,
 }
 
-impl Default for GitLogState {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl GitLogState {
     pub fn new() -> Self {
-        Self {
-            list_state: ListState::default(),
-        }
+        Self::default()
     }
 
     /// Reset state, selecting the first commit if any exist.

@@ -157,13 +157,12 @@ impl App {
                 transcript::render(frame, chunks[0], &mut self.transcript_state, entries);
             }
             View::DiffView(hash) => {
-                let header = hash.clone();
                 let diffs = self
                     .cache
-                    .cached_diffs(&header)
+                    .cached_diffs(hash)
                     .map(<[mementor_lib::git::diff::FileDiff]>::to_vec)
                     .unwrap_or_default();
-                diff_view::render(frame, chunks[0], &mut self.diff_state, &diffs, &header);
+                diff_view::render(frame, chunks[0], &mut self.diff_state, &diffs, hash);
             }
             View::GitLog => {
                 let commits = self.cache.commits().to_vec();
@@ -203,13 +202,9 @@ impl App {
                 let idx = *idx;
                 self.handle_detail_key(key, idx).await;
             }
-            View::Transcript {
-                checkpoint_idx,
-                session_idx,
-            } => {
+            View::Transcript { checkpoint_idx, .. } => {
                 let cp_idx = *checkpoint_idx;
-                let s_idx = *session_idx;
-                self.handle_transcript_key(key, cp_idx, s_idx);
+                self.handle_transcript_key(key, cp_idx);
             }
             View::DiffView(hash) => {
                 let hash = hash.clone();
@@ -277,9 +272,8 @@ impl App {
         }
     }
 
-    fn handle_transcript_key(&mut self, key: KeyEvent, checkpoint_idx: usize, _session_idx: usize) {
-        let entries = self.loaded_transcript.as_deref().unwrap_or(&[]);
-        let action = transcript::handle_key(key, &mut self.transcript_state, entries.len());
+    fn handle_transcript_key(&mut self, key: KeyEvent, checkpoint_idx: usize) {
+        let action = transcript::handle_key(key, &mut self.transcript_state);
         match action {
             transcript::TranscriptAction::Back => {
                 self.view = View::CheckpointDetail(checkpoint_idx);
@@ -489,12 +483,8 @@ impl App {
             })
             .collect();
 
-        self.search_state.selected = 0;
-        if self.search_state.results.is_empty() {
-            self.search_state.list_state.select(None);
-        } else {
-            self.search_state.list_state.select(Some(0));
-        }
+        let initial = (!self.search_state.results.is_empty()).then_some(0);
+        self.search_state.list_state.select(initial);
     }
 
     fn select_next(&mut self) {

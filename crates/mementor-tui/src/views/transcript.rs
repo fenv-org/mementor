@@ -47,12 +47,6 @@ pub struct TranscriptViewState {
 
 impl Default for TranscriptViewState {
     fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl TranscriptViewState {
-    pub fn new() -> Self {
         Self {
             scroll_offset: 0,
             expanded_tools: HashSet::new(),
@@ -66,6 +60,12 @@ impl TranscriptViewState {
             total_lines: 0,
             tool_line_map: Vec::new(),
         }
+    }
+}
+
+impl TranscriptViewState {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     pub fn reset(&mut self) {
@@ -213,11 +213,7 @@ pub fn render(
 // ---------------------------------------------------------------------------
 
 /// Handle key events for the transcript view.
-pub fn handle_key(
-    key: KeyEvent,
-    state: &mut TranscriptViewState,
-    _entry_count: usize,
-) -> TranscriptAction {
+pub fn handle_key(key: KeyEvent, state: &mut TranscriptViewState) -> TranscriptAction {
     // Search input mode intercepts all keys.
     if state.search_input_active {
         return handle_search_input(key, state);
@@ -721,12 +717,10 @@ fn nearest_tool_index(state: &TranscriptViewState) -> Option<usize> {
 }
 
 fn toggle_nearest_tool(state: &mut TranscriptViewState) {
-    if let Some(idx) = nearest_tool_index(state) {
-        if state.expanded_tools.contains(&idx) {
-            state.expanded_tools.remove(&idx);
-        } else {
-            state.expanded_tools.insert(idx);
-        }
+    if let Some(idx) = nearest_tool_index(state)
+        && !state.expanded_tools.remove(&idx)
+    {
+        state.expanded_tools.insert(idx);
     }
 }
 

@@ -60,8 +60,6 @@ pub struct AiSearchResult {
 /// Outer JSON envelope from `claude -p --output-format json`.
 #[derive(Debug, Deserialize)]
 struct ClaudeEnvelope {
-    #[serde(rename = "type")]
-    _type: String,
     result: Option<String>,
     is_error: Option<bool>,
 }
