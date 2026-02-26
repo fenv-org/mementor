@@ -73,6 +73,36 @@ pub fn wrap_str(s: &str, width: usize) -> Vec<String> {
     result
 }
 
+/// Format an ISO 8601 timestamp as a relative time string (e.g., "2h ago").
+///
+/// Falls back to the raw string on parse failure.
+pub fn format_relative_time(iso_str: &str) -> String {
+    let Ok(timestamp) = iso_str.parse::<jiff::Timestamp>() else {
+        return iso_str.to_owned();
+    };
+    let now = jiff::Timestamp::now();
+    let Ok(span) = timestamp.until(now) else {
+        return iso_str.to_owned();
+    };
+
+    let total_seconds = span.get_seconds();
+    let hours = total_seconds / 3600;
+    let days = hours / 24;
+
+    if days > 0 {
+        format!("{days}d ago")
+    } else if hours > 0 {
+        format!("{hours}h ago")
+    } else {
+        let mins = total_seconds / 60;
+        if mins > 0 {
+            format!("{mins}m ago")
+        } else {
+            "just now".to_owned()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -351,5 +381,30 @@ mod tests {
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0], "漢");
         assert_eq!(lines[1], "字");
+    }
+}
+
+/// Compute a centered `Rect` of the given `width` x `height` within `area`.
+pub fn centered_rect(
+    width: u16,
+    height: u16,
+    area: ratatui::prelude::Rect,
+) -> ratatui::prelude::Rect {
+    let x = area.x + (area.width.saturating_sub(width)) / 2;
+    let y = area.y + (area.height.saturating_sub(height)) / 2;
+    ratatui::prelude::Rect::new(x, y, width.min(area.width), height.min(area.height))
+}
+
+/// Format a token count as a human-readable string (e.g., "1.2M tok", "3.4K tok").
+#[allow(clippy::cast_precision_loss)]
+pub fn format_tokens(total: u64) -> String {
+    if total >= 1_000_000 {
+        let m = total as f64 / 1_000_000.0;
+        format!("{m:.1}M tok")
+    } else if total >= 1_000 {
+        let k = total as f64 / 1_000.0;
+        format!("{k:.1}K tok")
+    } else {
+        format!("{total} tok")
     }
 }

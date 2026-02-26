@@ -107,7 +107,7 @@ pub fn render<S: BuildHasher>(
     let subject = checkpoint
         .commit_hashes
         .first()
-        .and_then(|h| commits.iter().find(|c| &c.hash == h || &c.short_hash == h))
+        .and_then(|h| super::find_commit_by_hash(commits, h))
         .map_or_else(|| checkpoint.checkpoint_id.clone(), |c| c.subject.clone());
     let short_id = &checkpoint.checkpoint_id[..checkpoint.checkpoint_id.len().min(12)];
     let title = format!(" {short_id}: {subject} ");
@@ -217,7 +217,7 @@ fn render_sidebar<S: BuildHasher>(
     let relevant_commits: Vec<&CommitInfo> = checkpoint
         .commit_hashes
         .iter()
-        .filter_map(|h| commits.iter().find(|c| &c.hash == h || &c.short_hash == h))
+        .filter_map(|h| super::find_commit_by_hash(commits, h))
         .collect();
 
     let commit_items: Vec<ListItem> = relevant_commits
@@ -433,7 +433,7 @@ fn handle_scroll_down(
             let relevant = checkpoint
                 .commit_hashes
                 .iter()
-                .filter(|h| commits.iter().any(|c| &c.hash == *h || &c.short_hash == *h))
+                .filter(|h| super::find_commit_by_hash(commits, h).is_some())
                 .count();
             scroll_list_down(&mut state.commit_list_state, relevant);
         }
@@ -510,7 +510,7 @@ fn relevant_commit_hashes(checkpoint: &CheckpointMeta, commits: &[CommitInfo]) -
     checkpoint
         .commit_hashes
         .iter()
-        .filter(|h| commits.iter().any(|c| &c.hash == *h || &c.short_hash == *h))
+        .filter(|h| super::find_commit_by_hash(commits, h).is_some())
         .cloned()
         .collect()
 }
@@ -519,15 +519,6 @@ fn truncate(s: &str, max_width: usize) -> String {
     super::text_utils::truncate(s, max_width)
 }
 
-#[allow(clippy::cast_precision_loss)]
 fn format_tokens(total: u64) -> String {
-    if total >= 1_000_000 {
-        let m = total as f64 / 1_000_000.0;
-        format!("{m:.1}M tok")
-    } else if total >= 1_000 {
-        let k = total as f64 / 1_000.0;
-        format!("{k:.1}K tok")
-    } else {
-        format!("{total} tok")
-    }
+    super::text_utils::format_tokens(total)
 }

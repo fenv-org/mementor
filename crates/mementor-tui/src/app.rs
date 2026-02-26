@@ -5,6 +5,7 @@ use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
+use mementor_lib::ai_search::AiSearchResult;
 use mementor_lib::cache::DataCache;
 use mementor_lib::git::branch::list_branches;
 use mementor_lib::git::diff::FileStatus;
@@ -13,8 +14,11 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::prelude::*;
 use ratatui::widgets::ListState;
+use tokio::task::JoinHandle;
 
-use crate::views::{branch_popup, dashboard, detail, diff_view, git_log, status_bar, transcript};
+use crate::views::{
+    branch_popup, dashboard, detail, diff_view, git_log, search, status_bar, transcript,
+};
 
 /// The active view in the application.
 pub enum View {
@@ -50,6 +54,11 @@ pub struct App {
 
     /// Cached transcript entries for the currently viewed checkpoint session.
     pub loaded_transcript: Option<Vec<TranscriptEntry>>,
+
+    // Search overlay.
+    pub search_open: bool,
+    pub search_state: search::SearchOverlayState,
+    ai_search_handle: Option<JoinHandle<Result<Vec<AiSearchResult>>>>,
 }
 
 impl App {
@@ -72,6 +81,9 @@ impl App {
             diff_state: diff_view::DiffViewState::new(),
             git_log_state: git_log::GitLogState::new(),
             loaded_transcript: None,
+            search_open: false,
+            search_state: search::SearchOverlayState::new(),
+            ai_search_handle: None,
         }
     }
 
@@ -94,6 +106,9 @@ impl App {
     pub async fn run(&mut self, terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
         loop {
             terminal.draw(|frame| self.render(frame))?;
+
+            // Poll AI search progress.
+            self.poll_ai_search();
 
             if event::poll(std::time::Duration::from_millis(100))?
                 && let Event::Key(key) = event::read()?
@@ -142,13 +157,12 @@ impl App {
                 transcript::render(frame, chunks[0], &mut self.transcript_state, entries);
             }
             View::DiffView(hash) => {
-                let header = hash.clone();
                 let diffs = self
                     .cache
-                    .cached_diffs(&header)
+                    .cached_diffs(hash)
                     .map(<[mementor_lib::git::diff::FileDiff]>::to_vec)
                     .unwrap_or_default();
-                diff_view::render(frame, chunks[0], &mut self.diff_state, &diffs, &header);
+                diff_view::render(frame, chunks[0], &mut self.diff_state, &diffs, hash);
             }
             View::GitLog => {
                 let commits = self.cache.commits().to_vec();
@@ -157,7 +171,9 @@ impl App {
         }
         status_bar::render(frame, chunks[1], self);
 
-        if self.branch_popup_open {
+        if self.search_open {
+            search::render(frame, area, &mut self.search_state);
+        } else if self.branch_popup_open {
             branch_popup::render(frame, area, self);
         }
     }
@@ -166,6 +182,12 @@ impl App {
         // Ctrl-c always quits.
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             self.running = false;
+            return;
+        }
+
+        if self.search_open {
+            let action = search::handle_key(key, &mut self.search_state);
+            self.handle_search_action(action).await;
             return;
         }
 
@@ -180,13 +202,9 @@ impl App {
                 let idx = *idx;
                 self.handle_detail_key(key, idx).await;
             }
-            View::Transcript {
-                checkpoint_idx,
-                session_idx,
-            } => {
+            View::Transcript { checkpoint_idx, .. } => {
                 let cp_idx = *checkpoint_idx;
-                let s_idx = *session_idx;
-                self.handle_transcript_key(key, cp_idx, s_idx);
+                self.handle_transcript_key(key, cp_idx);
             }
             View::DiffView(hash) => {
                 let hash = hash.clone();
@@ -206,6 +224,7 @@ impl App {
                 let _ = self.cache.refresh().await;
                 self.clamp_selection();
             }
+            KeyCode::Char('/') => self.open_search(),
             KeyCode::Char('g') => {
                 self.git_log_state.reset(self.cache.commits().len());
                 self.view = View::GitLog;
@@ -253,9 +272,8 @@ impl App {
         }
     }
 
-    fn handle_transcript_key(&mut self, key: KeyEvent, checkpoint_idx: usize, _session_idx: usize) {
-        let entries = self.loaded_transcript.as_deref().unwrap_or(&[]);
-        let action = transcript::handle_key(key, &mut self.transcript_state, entries.len());
+    fn handle_transcript_key(&mut self, key: KeyEvent, checkpoint_idx: usize) {
+        let action = transcript::handle_key(key, &mut self.transcript_state);
         match action {
             transcript::TranscriptAction::Back => {
                 self.view = View::CheckpointDetail(checkpoint_idx);
@@ -341,6 +359,132 @@ impl App {
             return;
         }
         self.loaded_transcript = None;
+    }
+
+    fn open_search(&mut self) {
+        self.search_state.reset();
+        self.search_open = true;
+    }
+
+    async fn handle_search_action(&mut self, action: search::SearchOverlayAction) {
+        match action {
+            search::SearchOverlayAction::Close => {
+                self.cancel_ai_search();
+                self.search_open = false;
+            }
+            search::SearchOverlayAction::OpenCheckpoint(idx) => {
+                self.search_open = false;
+                self.open_detail(idx).await;
+            }
+            search::SearchOverlayAction::OpenCommit(hash) => {
+                self.search_open = false;
+                self.open_diff(&hash).await;
+            }
+            search::SearchOverlayAction::TriggerSearch => {
+                self.start_ai_search();
+            }
+            search::SearchOverlayAction::None => {}
+        }
+    }
+
+    fn start_ai_search(&mut self) {
+        // Cancel any in-flight search.
+        self.cancel_ai_search();
+
+        let query = self.search_state.input.clone();
+        self.search_state.loading = true;
+        self.search_state.error = None;
+        self.search_state.elapsed_ticks = 0;
+        self.search_state.results.clear();
+        self.search_state.list_state.select(None);
+        self.search_state.last_searched_query = Some(query.clone());
+
+        self.ai_search_handle = Some(mementor_lib::ai_search::spawn_ai_search(query));
+    }
+
+    fn cancel_ai_search(&mut self) {
+        if let Some(handle) = self.ai_search_handle.take() {
+            handle.abort();
+        }
+        self.search_state.loading = false;
+    }
+
+    fn poll_ai_search(&mut self) {
+        // Increment spinner tick while loading.
+        if self.search_state.loading {
+            self.search_state.elapsed_ticks += 1;
+        }
+
+        let Some(handle) = &self.ai_search_handle else {
+            return;
+        };
+        if !handle.is_finished() {
+            return;
+        }
+
+        // Take the handle — we know it's finished so try_join is instant.
+        let handle = self.ai_search_handle.take().unwrap();
+        self.search_state.loading = false;
+
+        // Use now_or_never since we confirmed is_finished().
+        let Some(join_result) = futures::FutureExt::now_or_never(handle) else {
+            return;
+        };
+        match join_result {
+            Ok(Ok(results)) => self.apply_ai_results(results),
+            Ok(Err(e)) => {
+                self.search_state.error = Some(format!("{e}"));
+            }
+            Err(e) if e.is_cancelled() => {
+                // Search was cancelled — do nothing.
+            }
+            Err(e) => {
+                self.search_state.error = Some(format!("search task panicked: {e}"));
+            }
+        }
+    }
+
+    fn apply_ai_results(&mut self, results: Vec<AiSearchResult>) {
+        use crate::views::text_utils::format_relative_time;
+
+        let checkpoints = self.cache.checkpoints();
+        let commits = self.cache.commits();
+
+        self.search_state.results = results
+            .into_iter()
+            .filter_map(|r| {
+                let sha = r.source.commit_sha.as_deref()?;
+
+                // Find commit by prefix match.
+                let commit = commits
+                    .iter()
+                    .find(|c| c.hash.starts_with(sha) || sha.starts_with(&c.hash));
+
+                let title = commit.map_or_else(|| "untitled".to_owned(), |c| c.subject.clone());
+                let time_ago = commit
+                    .map(|c| format_relative_time(&c.date))
+                    .unwrap_or_default();
+
+                // Find checkpoint that contains this commit.
+                let checkpoint_idx = commit.and_then(|cm| {
+                    checkpoints
+                        .iter()
+                        .position(|cp| cp.commit_hashes.contains(&cm.hash))
+                });
+
+                Some(search::SearchMatchDisplay {
+                    checkpoint_idx,
+                    commit_sha: sha.to_owned(),
+                    title,
+                    time_ago,
+                    answer: r.answer,
+                    pr: r.source.pr,
+                })
+            })
+            .collect();
+
+        let initial = (!self.search_state.results.is_empty()).then_some(0);
+        self.search_state.list_state.select(initial);
     }
 
     fn select_next(&mut self) {

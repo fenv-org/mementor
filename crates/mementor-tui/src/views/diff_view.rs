@@ -6,6 +6,7 @@ use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragra
 use mementor_lib::git::diff::{DiffLine, FileDiff, FileStatus};
 
 /// State for the diff view.
+#[derive(Default)]
 pub struct DiffViewState {
     /// Index of the currently displayed file.
     pub file_index: usize,
@@ -17,20 +18,9 @@ pub struct DiffViewState {
     pub file_picker_state: ListState,
 }
 
-impl Default for DiffViewState {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl DiffViewState {
     pub fn new() -> Self {
-        Self {
-            file_index: 0,
-            scroll_offset: 0,
-            file_picker_open: false,
-            file_picker_state: ListState::default(),
-        }
+        Self::default()
     }
 
     /// Reset state for viewing a new diff.
@@ -345,9 +335,7 @@ fn handle_file_picker_key(
 }
 
 fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
-    let x = area.x + (area.width.saturating_sub(width)) / 2;
-    let y = area.y + (area.height.saturating_sub(height)) / 2;
-    Rect::new(x, y, width.min(area.width), height.min(area.height))
+    super::text_utils::centered_rect(width, height, area)
 }
 
 #[cfg(test)]
