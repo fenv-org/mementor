@@ -1,0 +1,147 @@
+<teammate-message teammate_id="team-lead">
+You are the tui-agent on team ai-search-impl. Your task is #2: Update search.rs + app.rs for new result types.
+
+The lib layer (ai_search.rs) has been rewritten. The new types are:
+
+```rust
+// In mementor_lib::ai_search
+pub struct AiSearchResult {
+    pub source: AiSearchSource,
+    pub answer: String,
+}
+pub struct AiSearchSource {
+    pub commit_sha: Option&lt;String&gt;,
+    pub pr: Option&lt;String&gt;,
+}
+```
+
+## What to do
+
+### 1. Update `crates/mementor-tui/src/views/search.rs`
+
+**Read the current file first**, then make these changes:
+
+#### Change `SearchOverlayAction` — add `OpenCommit`:
+```rust
+pub enum SearchOverlayAction {
+    Close,
+    OpenCheckpoint(usize),
+    OpenCommit(String),     // NEW: for commits without a checkpoint
+    TriggerSearch,
+    None,
+}
+```
+
+#### Change `SearchMatchDisplay` fields:
+```rust
+pub struct SearchMatchDisplay {
+    pub checkpoint_idx: Option<usize>,  // was: usize (now Optional)
+    pub commit_sha: String,             // was: checkpoint_id
+    pub title: String,
+    pub time_ago: String,
+    pub answer: String,                 // was: relevance
+    pub pr: Option<String>,             // NEW
+}
+```
+
+#### Update `render_results()`:
+- Line 1: `[N] commit_sha[:12] — title (time_ago)`. If PR exists, show `[N] PR#xx — title (time_ago)` instead.
+- Line 2: answer (green) — was "relevance"
+- **Remove** line 3 (snippet) — answer is sufficient
+- Keep the blank line separator
+
+#### Update `handle_key()` Enter logic:
+```rust
+KeyCode::Enter => {
+    if !state.results.is_empty() {
+        if let Some(result) = state.results.get(state.selected) {
+            if let Some(idx) = result.checkpoint_idx {
+                return SearchOverlayAction::OpenCheckpoint(idx);
+            }
+            return SearchOverlayAction::OpenCommit(result.commit_sha.clone());
+        }
+    }
+    if state.input.is_empty() {
+        SearchOverlayAction::None
+    } else {
+        SearchOverlayAction::TriggerSearch
+    }
+}
+```
+
+### 2. Update `crates/mementor-tui/src/app.rs`
+
+**Read the current file first**, then make these changes:
+
+#### Update `handle_search_action()` — handle new `OpenCommit`:
+```rust
+search::SearchOverlayAction::OpenCommit(hash) => {
+    self.search_open = false;
+    self.open_diff(&hash).await;
+}
+```
+
+#### Rewrite `apply_ai_results()`:
+The old version resolved `checkpoint_id` → index. Now resolve `commit_sha` → commit → checkpoint:
+
+```rust
+fn apply_ai_results(&mut self, results: Vec<AiSearchResult>) {
+    use crate::views::text_utils::format_relative_time;
+
+    let checkpoints = self.cache.checkpoints();
+    let commits = self.cache.commits();
+
+    self.search_state.results = results
+        .into_iter()
+        .filter_map(|r| {
+            let sha = r.source.commit_sha.as_deref()?;
+
+            // Find commit by prefix match
+            let commit = commits.iter().find(|c| c.hash.starts_with(sha) || sha.starts_with(&c.hash));
+
+            let title = commit.map_or_else(
+                || "untitled".to_owned(),
+                |c| c.subject.clone(),
+            );
+            let time_ago = commit
+                .map(|c| format_relative_time(&c.date))
+                .unwrap_or_default();
+
+            // Find checkpoint that contains this commit
+            let checkpoint_idx = commit.and_then(|cm| {
+                checkpoints.iter().position(|cp| cp.commit_hashes.contains(&cm.hash))
+            });
+
+            Some(search::SearchMatchDisplay {
+                checkpoint_idx,
+                commit_sha: sha.to_owned(),
+                title,
+                time_ago,
+                answer: r.answer,
+                pr: r.source.pr,
+            })
+        })
+        .collect();
+
+    self.search_state.selected = 0;
+    if self.search_state.results.is_empty() {
+        self.search_state.list_state.select(None);
+    } else {
+        self.search_state.list_state.select(Some(0));
+    }
+}
+```
+
+## Important
+- Follow the project's Rust coding conventions  
+- Read each file before editing
+- Do NOT modify any lib crate files
+- Mark task #2 as completed when done
+
+</teammate-message>
+
+---
+
+<teammate-message teammate_id="tui-agent" color="green">
+{"type":"task_assignment","taskId":"2","subject":"Update search.rs + app.rs for new result types","description":"Change SearchMatchDisplay fields (checkpoint_idx Optional, commit_sha, answer, pr). Add OpenCommit action. Update render (commit/title + answer, remove snippet). Update handle_key Enter. In app.rs: update apply_ai_results to resolve commit_sha → checkpoint, handle OpenCommit → open_diff.","assignedBy":"tui-agent","timestamp":"2026-02-26T13:53:52.567Z"}
+</teammate-message>

@@ -3,7 +3,7 @@
   "checkpoint_id": "050bca5f71dd",
   "strategy": "manual-commit",
   "branch": "phase4-search-polish",
-  "checkpoints_count": 18,
+  "checkpoints_count": 20,
   "files_touched": [
     "crates/mementor-lib/src/ai_search.rs",
     "crates/mementor-lib/src/lib.rs",
@@ -32,13 +32,20 @@
       "context": "/05/0bca5f71dd/2/context.md",
       "content_hash": "/05/0bca5f71dd/2/content_hash.txt",
       "prompt": "/05/0bca5f71dd/2/prompt.txt"
+    },
+    {
+      "metadata": "/05/0bca5f71dd/3/metadata.json",
+      "transcript": "/05/0bca5f71dd/3/full.jsonl",
+      "context": "/05/0bca5f71dd/3/context.md",
+      "content_hash": "/05/0bca5f71dd/3/content_hash.txt",
+      "prompt": "/05/0bca5f71dd/3/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 4125,
-    "cache_creation_tokens": 812536,
-    "cache_read_tokens": 50923310,
-    "output_tokens": 121849,
-    "api_call_count": 509
+    "input_tokens": 4138,
+    "cache_creation_tokens": 873690,
+    "cache_read_tokens": 51295097,
+    "output_tokens": 123329,
+    "api_call_count": 518
   }
 }
