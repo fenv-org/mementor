@@ -1,0 +1,42 @@
+<teammate-message teammate_id="team-lead">
+You are a teammate on team "phase4-search". Your name is "search-ui". Read your assigned task from the task list (Task #2), then implement it fully.
+
+**IMPORTANT WORKFLOW**:
+1. Read Task #2 via TaskGet to understand the full requirements.
+2. Read the existing files you need to understand:
+   - `crates/mementor-tui/src/views/branch_popup.rs` (for popup rendering pattern)
+   - `crates/mementor-tui/src/views/transcript.rs` (for search input handling pattern)
+   - `crates/mementor-tui/src/views/text_utils.rs` (for truncate utility)
+   - `crates/mementor-tui/src/views/status_bar.rs` (for key hint styling)
+   - `crates/mementor-tui/src/views/mod.rs`
+   - `crates/mementor-tui/src/app.rs` (for context on how views integrate)
+   - `crates/mementor-tui/Cargo.toml` (for available dependencies)
+3. Create `crates/mementor-tui/src/views/search.rs` with:
+   - `SearchOverlayState` struct
+   - `SearchMatchDisplay` struct
+   - `SearchOverlayAction` enum
+   - `render()` function
+   - `handle_key()` function
+4. Add `pub mod search;` to `crates/mementor-tui/src/views/mod.rs`.
+5. Run `cargo build` to verify compilation. Note: there will be unused warnings since the App integration is a separate task — that's expected.
+6. Mark Task #2 as completed.
+
+**IMPORTANT**: This module must NOT import `DataCache` or call search functions. It only handles UI state and rendering. The `SearchScope` enum from `mementor_lib::search` can be imported once that module exists. If it doesn't exist yet (teammate still working on it), define a local `SearchScope` enum — the lead will reconcile later.
+
+Wait — actually, since both tasks run in parallel, you should define your own local `SearchScope` for now. The lead will unify them during integration. Define it as:
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchScope {
+    AllBranches,
+    CurrentBranch,
+}
+```
+
+The project uses Rust edition 2024 with toolchain 1.93.1 (managed via mise).
+</teammate-message>
+
+---
+
+<teammate-message teammate_id="search-ui" color="green">
+{"type":"task_assignment","taskId":"2","subject":"Create search overlay UI in mementor-tui","description":"Create `crates/mementor-tui/src/views/search.rs` — the search overlay UI component.\n\n**Context**: This is a modal overlay rendered on top of the checkpoint list (dashboard), similar to the existing branch_popup. It provides cross-transcript search with an input field, results list, and scope toggle.\n\n**Reference the existing `branch_popup.rs`** for the popup rendering pattern. The search overlay should be visually similar but taller (takes ~80% of screen height).\n\n**ASCII mockup** from the design doc:\n```\n+--[ Search ]----------------------------------------------------------+\n| Query: authentication middleware_                                     |\n+-----------------------------------------------------------------------+\n|                                                                       |\n|  [1] d5bd4941cf95 — redesign schema (2h ago)                         |\n|      \"...JWT authentication middleware for the API...\"                |\n|                                                                       |\n|  [2] 7f11f9dc0ce6 — add entire integration (5h ago)                  |\n|      \"...authenticate with the entire.io service...\"                  |\n|                                                                       |\n|  [3] bed382d — switch embedding model (1d ago)                        |\n|      \"...no authentication needed for local model...\"                 |\n|                                                                       |\n+-----------------------------------------------------------------------+\n| Enter Open  j/k Navigate  Tab Scope: all  Esc Close  3 results       |\n+-----------------------------------------------------------------------+\n```\n\n**Types to define**:\n\n```rust\n/// State for the search overlay.\npub struct SearchOverlayState {\n    /// Current search input text.\n    pub input: String,\n    /// Search results (updated on every input change by the App).\n    pub results: Vec<SearchMatchDisplay>,\n    /// Selected result index in the list.\n    pub selected: usize,\n    /// Search scope toggle.\n    pub scope: SearchScope,  // from mementor_lib::search\n    /// List state for scrolling/selection.\n    pub list_state: ListState,\n}\n\n/// Display-ready search result (converted from SearchMatch by the App layer).\n#[derive(Debug, Clone)]\npub struct SearchMatchDisplay {\n    /// Checkpoint index (for navigation).\n    pub checkpoint_idx: usize,\n    /// Short checkpoint ID (first 12 chars).\n    pub checkpoint_id: String,\n    /// Commit subject or fallback description.\n    pub title: String,\n    /// Relative time string (e.g., \"2h ago\").\n    pub time_ago: String,\n    /// Matching text snippet with surrounding context.\n    pub snippet: String,\n    /// Number of matches in this checkpoint.\n    pub match_count: usize,\n}\n\n/// Action returned by search key handler.\npub enum SearchOverlayAction {\n    /// Close the search overlay.\n    Close,\n    /// Open the checkpoint at this index.\n    OpenCheckpoint(usize),\n    /// Search query changed — App should re-run search.\n    QueryChanged,\n    /// Scope toggled — App should re-run search.\n    ScopeChanged,\n    /// No action needed.\n    None,\n}\n```\n\n**`render()` function**:\n```rust\npub fn render(frame: &mut Frame, area: Rect, state: &mut SearchOverlayState)\n```\n\nImplementation:\n1. Clear the background area (draw a Clear widget first).\n2. Create a centered popup: 80% width, 80% height of `area`.\n3. Draw a Block with title \" Search \" and borders.\n4. Split interior vertically: input line (1 row) + results list (rest) + help bar (1 row).\n5. **Input line**: Render \"Query: \" prefix in gray + `state.input` in white. Show cursor at end of input.\n6. **Results list**: For each `SearchMatchDisplay`, render two lines:\n   - Line 1: `[N] checkpoint_id — title (time_ago)` — bold, with checkpoint_id in cyan.\n   - Line 2: `\"...snippet...\"` — in gray italic.\n   Selected item gets a highlight background.\n7. **Help bar**: `Enter Open  j/k Navigate  Tab Scope: <all|branch>  Esc Close  N results`\n   Keys in yellow, descriptions in dark gray. Result count at far right.\n8. If results is empty and input is not empty, show \"No results\" centered in the results area.\n9. If input is empty, show \"Type to search across all transcripts\" centered.\n\nUse `ListState` for scrollable results, same as other views.\n\n**`handle_key()` function**:\n```rust\npub fn handle_key(key: KeyEvent, state: &mut SearchOverlayState) -> SearchOverlayAction\n```\n\nKey bindings (search is always in \"input mode\" — all typing goes to the input):\n- **Printable chars**: Append to `state.input`, return `QueryChanged`.\n- **Backspace**: Remove last char from `state.input`, return `QueryChanged`.\n- **Ctrl-u**: Clear input, return `QueryChanged`.\n- **Down / Ctrl-n**: Select next result, return `None`.\n- **Up / Ctrl-p**: Select previous result, return `None`.\n- **Enter**: If a result is selected, return `OpenCheckpoint(result.checkpoint_idx)`.\n- **Tab**: Toggle `state.scope` between `AllBranches` and `CurrentBranch`, return `ScopeChanged`.\n- **Esc**: Return `Close`.\n\n**`SearchOverlayState` methods**:\n```rust\nimpl SearchOverlayState {\n    pub fn new() -> Self { ... }\n    pub fn reset(&mut self) { /* clear input, results, selection */ }\n    fn select_next(&mut self) { ... }\n    fn select_prev(&mut self) { ... }\n}\n```\n\n**Important**: This module should NOT import `DataCache` or call any search functions directly. It only deals with UI state and rendering. The `App` layer bridges search data and search UI.\n\n**Dependencies to use** (already in Cargo.toml):\n- `ratatui` — all rendering\n- `crossterm` — key events\n- `mementor_lib::search::SearchScope` — for scope enum\n\n**Conventions**:\n- Edition 2024\n- Follow the existing view module patterns (see `branch_popup.rs`, `transcript.rs`)\n- Use `text_utils::truncate()` for long strings\n- Colors: cyan for IDs, yellow for keys, gray for descriptions, default for content\n- Run `cargo build` to verify compilation (there will be unused warnings since App integration is separate — that's fine)","assignedBy":"search-ui","timestamp":"2026-02-26T04:46:55.932Z"}
+</teammate-message>
