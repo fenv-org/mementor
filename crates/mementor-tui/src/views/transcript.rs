@@ -35,6 +35,8 @@ pub struct TranscriptViewState {
     pub search_input_active: bool,
     /// Buffer for typing a search query.
     pub search_input_buf: String,
+    /// Whether progress entries are rendered (default: hidden).
+    pub show_progress: bool,
 
     // -- Internal bookkeeping (updated each render) --------------------------
     /// Total rendered line count from the last `render()` call.
@@ -60,6 +62,7 @@ impl TranscriptViewState {
             search_index: 0,
             search_input_active: false,
             search_input_buf: String::new(),
+            show_progress: false,
             total_lines: 0,
             tool_line_map: Vec::new(),
         }
@@ -74,6 +77,7 @@ impl TranscriptViewState {
         self.search_index = 0;
         self.search_input_active = false;
         self.search_input_buf.clear();
+        self.show_progress = false;
         self.total_lines = 0;
         self.tool_line_map.clear();
     }
@@ -173,11 +177,23 @@ pub fn render(
         format!(" {}-{}/{} ", state.scroll_offset + 1, end, lines.len())
     };
 
+    let progress_hint = if state.show_progress {
+        " p:hide progress "
+    } else {
+        " p:show progress "
+    };
+
     let transcript_widget = Paragraph::new(Text::from(visible)).block(
         Block::default()
             .borders(Borders::ALL)
             .title(" Transcript ")
-            .title_bottom(Line::from(scroll_info).right_aligned()),
+            .title_bottom(
+                Line::from(vec![
+                    Span::styled(progress_hint, Style::default().fg(Color::DarkGray)),
+                    Span::styled(scroll_info, Style::default()),
+                ])
+                .right_aligned(),
+            ),
     );
     frame.render_widget(transcript_widget, content_area);
 
@@ -255,6 +271,12 @@ pub fn handle_key(
             TranscriptAction::None
         }
 
+        // -- Progress toggle -------------------------------------------------
+        KeyCode::Char('p') => {
+            state.show_progress = !state.show_progress;
+            TranscriptAction::None
+        }
+
         // -- Sidebar ---------------------------------------------------------
         KeyCode::Char('o') => {
             state.show_sidebar = !state.show_sidebar;
@@ -321,11 +343,13 @@ fn build_lines(
                 lines.push(Line::from(""));
             }
             TranscriptEntry::Progress(raw) => {
-                let display = truncate(raw, 80);
-                lines.push(Line::from(Span::styled(
-                    format!("[progress] {display}"),
-                    Style::default().fg(Color::DarkGray),
-                )));
+                if state.show_progress {
+                    let display = truncate(raw, 80);
+                    lines.push(Line::from(Span::styled(
+                        format!("[progress] {display}"),
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                }
             }
             TranscriptEntry::Other(_) => {}
         }

@@ -286,12 +286,6 @@ fn render_transcript_pane(
             TranscriptEntry::Message(msg) => {
                 render_message_lines(&mut lines, msg);
             }
-            TranscriptEntry::Progress(text) => {
-                lines.push(Line::from(Span::styled(
-                    format!("  {text}"),
-                    Style::default().fg(Color::DarkGray),
-                )));
-            }
             TranscriptEntry::PrLink {
                 pr_number, pr_url, ..
             } => {
@@ -306,7 +300,7 @@ fn render_transcript_pane(
                     Style::default().fg(Color::DarkGray),
                 )));
             }
-            TranscriptEntry::Other(_) => {}
+            TranscriptEntry::Progress(_) | TranscriptEntry::Other(_) => {}
         }
         lines.push(Line::from(""));
     }
