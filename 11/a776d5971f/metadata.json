@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "11a776d5971f",
+  "strategy": "manual-commit",
+  "branch": "phase3-detail-transcript-diff",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "crates/mementor-tui/src/views/transcript.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/11/a776d5971f/0/metadata.json",
+      "transcript": "/11/a776d5971f/0/full.jsonl",
+      "context": "/11/a776d5971f/0/context.md",
+      "content_hash": "/11/a776d5971f/0/content_hash.txt",
+      "prompt": "/11/a776d5971f/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 24,
+    "cache_creation_tokens": 85897,
+    "cache_read_tokens": 1175157,
+    "output_tokens": 41487,
+    "api_call_count": 21
+  }
+}

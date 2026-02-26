@@ -1,0 +1,35 @@
+<teammate-message teammate_id="team-lead">
+You are the transcript-agent on team "phase3-detail". Your task is to implement the fullscreen transcript view for the mementor TUI app.
+
+Read task #1 from the task list for full requirements. Then:
+
+1. Read the existing code to understand the codebase:
+   - `crates/mementor-tui/src/views/dashboard.rs` (example view pattern)
+   - `crates/mementor-tui/src/app.rs` (App struct for context)
+   - `crates/mementor-tui/Cargo.toml` (available deps)
+   - `crates/mementor-lib/src/model/transcript.rs` (data types)
+   - `crates/mementor-lib/src/entire/transcript.rs` (parsing, for understanding data)
+
+2. Create `crates/mementor-tui/src/views/transcript.rs` with:
+   - `TranscriptViewState` struct with scroll, expanded tools, sidebar toggle, search state
+   - `TranscriptAction` enum: None, Back, ScrollTo(usize)
+   - `render()` function: two-panel (transcript + tool sidebar), message rendering by type
+   - `handle_key()` function: scrolling, search, tool expand/collapse, sidebar toggle
+   - Message rendering: User (green), Assistant (blue), Thinking (dim gray collapsible), ToolUse (bordered box), ToolResult (under tool)
+   - Search with `/` input mode, `n`/`N` cycling, yellow highlight on matches
+   - Tool index sidebar on right 25%
+
+3. Do NOT modify any other files (app.rs, views/mod.rs, etc.) — the lead handles integration.
+
+4. After writing the file, run:
+   - Add `pub mod transcript;` to `views/mod.rs` temporarily so it compiles
+   - `cargo clippy -p mementor-tui -- -D warnings`
+   - `cargo fmt --check -p mementor-tui`
+   - Fix any issues
+   - Then REVERT the views/mod.rs change (remove the `pub mod transcript;` line)
+
+5. Mark task #1 as completed when done.
+
+IMPORTANT: Use Rust edition 2024 features (let chains in if-let). The crate uses `edition = "2024"` and `resolver = "3"`.
+IMPORTANT: Do NOT use `unicode-width` crate — it's not in the dependencies.
+</teammate-message>

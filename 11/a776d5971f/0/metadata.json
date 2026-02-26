@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "11a776d5971f",
+  "session_id": "6eaa03e5-fde2-4465-8719-ba4f8f98422c",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-26T00:57:27.475601Z",
+  "branch": "phase3-detail-transcript-diff",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "crates/mementor-tui/src/views/transcript.rs"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "a4953bd9876f",
+  "token_usage": {
+    "input_tokens": 24,
+    "cache_creation_tokens": 85897,
+    "cache_read_tokens": 1175157,
+    "output_tokens": 41487,
+    "api_call_count": 21
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-26T00:57:27.163698Z",
+    "agent_lines": 602,
+    "human_added": 91,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 693,
+    "agent_percentage": 86.86868686868688
+  }
+}
