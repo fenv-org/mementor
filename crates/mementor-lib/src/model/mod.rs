@@ -1,4 +1,4 @@
-mod checkpoint;
+pub(crate) mod checkpoint;
 mod transcript;
 
 pub use checkpoint::{Attribution, CheckpointMeta, SessionMeta, TokenUsage};

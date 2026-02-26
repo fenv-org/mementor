@@ -18,6 +18,10 @@ pub struct Attribution {
     pub human_modified: u64,
     pub human_removed: u64,
     pub agent_percentage: f64,
+    #[serde(default)]
+    pub total_committed: u64,
+    #[serde(default)]
+    pub calculated_at: String,
 }
 
 /// Metadata for a single session within a checkpoint.
@@ -36,8 +40,37 @@ pub struct SessionMeta {
 }
 
 /// Metadata for a checkpoint on the entire/checkpoints/v1 branch.
-#[derive(Debug, Clone, Deserialize)]
+///
+/// This is the public API type. Deserialization from the checkpoint-level
+/// `metadata.json` goes through [`RawCheckpointMeta`] first, then sessions
+/// are resolved by loading each session's own `metadata.json`.
+#[derive(Debug, Clone)]
 pub struct CheckpointMeta {
+    pub checkpoint_id: String,
+    pub strategy: String,
+    pub branch: String,
+    pub files_touched: Vec<String>,
+    pub sessions: Vec<SessionMeta>,
+    pub token_usage: TokenUsage,
+    /// Commit hashes associated with this checkpoint (from git log trailers).
+    /// Populated after loading, not from metadata.json directly.
+    pub commit_hashes: Vec<String>,
+}
+
+/// A session reference as stored in the checkpoint-level `metadata.json`.
+///
+/// Contains paths to the session's files on the checkpoint branch, not the
+/// actual session data.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct SessionRef {
+    pub metadata: String,
+    pub transcript: String,
+}
+
+/// Raw checkpoint metadata as deserialized directly from the checkpoint-level
+/// `metadata.json`. Sessions are path references, not full session data.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct RawCheckpointMeta {
     pub checkpoint_id: String,
     #[serde(default)]
     pub strategy: String,
@@ -46,11 +79,7 @@ pub struct CheckpointMeta {
     #[serde(default)]
     pub files_touched: Vec<String>,
     #[serde(default)]
-    pub sessions: Vec<SessionMeta>,
+    pub sessions: Vec<SessionRef>,
     #[serde(default)]
     pub token_usage: TokenUsage,
-    /// Commit hashes associated with this checkpoint (from git log trailers).
-    /// Populated after loading, not from metadata.json directly.
-    #[serde(skip)]
-    pub commit_hashes: Vec<String>,
 }
