@@ -19,13 +19,14 @@ zero external API dependencies.
 - **Serialization**: `serde` + `serde_json`
 - **Error handling**: `anyhow`
 - **Logging**: `tracing` + `tracing-subscriber`
+- **Scripts**: Deno (managed via mise, see `mise.toml`)
 
 ## Constraints
 
 - **No external API dependencies at runtime**: All operations run locally with
   no network calls.
-- **macOS only (Milestone 1)**: Target Apple Silicon (ARM64). Do not add Linux
-  or Windows-specific code yet.
+- **macOS only**: Target Apple Silicon (ARM64). Do not add Linux or
+  Windows-specific code yet.
 - **No native C dependencies**: No build.rs, no cc crate, no vendor/ directory.
   Pure Rust dependencies only.
 
@@ -34,41 +35,54 @@ zero external API dependencies.
 ```
 mementor/
   Cargo.toml              Workspace root (3 members)
-  mise.toml               Rust toolchain version
+  mise.toml               Toolchain versions (Rust, Deno)
   CLAUDE.md               Agent instructions (this file)
+  AGENTS.md -> CLAUDE.md  Symlink for agent discovery
   README.md               Project README
 
   crates/
     mementor-lib/         Core library
       src/
-        lib.rs            Library root
+        lib.rs            Library root (re-exports all modules)
+        cache.rs          In-memory data cache (checkpoints, commits, diffs)
         context.rs        Project context (paths, worktree info)
-        git/              Git operations
-          mod.rs          Module root + re-exports
-          worktree.rs     Git worktree detection
-    mementor-tui/         TUI application (was mementor-cli)
+        entire/           Entire-cli checkpoint discovery and transcript parsing
+        git/              Git operations (worktree, branch, diff, log, tree)
+        model/            Data types (CheckpointMeta, TranscriptEntry, etc.)
+    mementor-tui/         TUI application
       src/
         lib.rs            Library root
-        app.rs            Application stub
+        app.rs            Application orchestrator (event loop, view routing)
+        views/            TUI views (dashboard, detail, transcript, diff, git log)
     mementor-main/        Thin binary entry point
-      src/main.rs         main() — resolves worktree, launches TUI
+      src/main.rs         main() — resolves worktree, initializes cache, launches TUI
+
+  .claude/                Claude Code settings, skills, and hooks
+  .entire/                Entire-cli config and runtime data (settings.json, metadata/)
+  .github/                CI workflows (ci.yml, deno.yml)
+  .vscode/                Editor settings
 
   history/                Task documents (one per session/milestone)
   docs/                   Coding conventions and patterns
-  scripts/                Build and utility scripts
+  scripts/                Utility scripts
 ```
 
 ### Crate Responsibilities
 
-- **mementor-lib**: Core library. Git operations (worktree detection, branch
-  reading), data types, context management. No TUI or CLI concerns.
+- **mementor-lib**: Core library. Entire-cli checkpoint discovery and JSONL
+  transcript parsing (`entire/`), git operations — worktree detection, branch,
+  diff, log, tree reading (`git/`), data types (`model/`), in-memory data
+  cache (`cache.rs`), and project context (`context.rs`). No TUI or CLI
+  concerns.
 
-- **mementor-tui**: TUI application using ratatui + crossterm. CLI argument
-  parsing with clap, terminal UI rendering, event loop, views and widgets.
+- **mementor-tui**: TUI application using ratatui + crossterm. Application
+  orchestrator with event loop, view routing, and keyboard handling (`app.rs`).
+  Views for dashboard, checkpoint detail, transcript, diff, and git log
+  (`views/`). CLI argument parsing with clap.
 
 - **mementor-main**: The `[[bin]]` crate (binary name: `mementor`). Resolves
-  git worktree, constructs context, and delegates to mementor-tui. Minimal
-  wiring logic only.
+  git worktree, initializes data cache, sets up the terminal, and delegates
+  to `App::run()`. Minimal wiring logic only.
 
 ## Git Worktree
 
