@@ -1,0 +1,20 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "4db41a4586fc",
+  "strategy": "manual-commit",
+  "branch": "phase4-search-polish",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "crates/mementor-lib/src/ai_search.rs",
+    "crates/mementor-lib/src/ai_search_prompt.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/4d/b41a4586fc/0/metadata.json",
+      "transcript": "/4d/b41a4586fc/0/full.jsonl",
+      "context": "",
+      "content_hash": "/4d/b41a4586fc/0/content_hash.txt",
+      "prompt": ""
+    }
+  ]
+}
