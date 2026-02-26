@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "91295c4c7dbb",
+  "session_id": "b74fb8cb-2904-417c-8996-95902041abc9",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-26T04:45:27.228564Z",
+  "branch": "claude-md-improvements",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".github/workflows/ci.yml"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "363e5c6cea66",
+  "token_usage": {
+    "input_tokens": 791,
+    "cache_creation_tokens": 133800,
+    "cache_read_tokens": 5358619,
+    "output_tokens": 20468,
+    "api_call_count": 72
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-26T04:45:26.816688Z",
+    "agent_lines": 35,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 35,
+    "agent_percentage": 100
+  },
+  "transcript_path": ".claude/projects/-Users-heejoon-kang-dev-git-fenv-org-mementor/b74fb8cb-2904-417c-8996-95902041abc9.jsonl"
+}

@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "91295c4c7dbb",
+  "strategy": "manual-commit",
+  "branch": "claude-md-improvements",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".github/workflows/ci.yml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/91/295c4c7dbb/0/metadata.json",
+      "transcript": "/91/295c4c7dbb/0/full.jsonl",
+      "context": "/91/295c4c7dbb/0/context.md",
+      "content_hash": "/91/295c4c7dbb/0/content_hash.txt",
+      "prompt": "/91/295c4c7dbb/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 791,
+    "cache_creation_tokens": 133800,
+    "cache_read_tokens": 5358619,
+    "output_tokens": 20468,
+    "api_call_count": 72
+  }
+}
