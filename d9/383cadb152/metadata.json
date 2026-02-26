@@ -3,12 +3,17 @@
   "checkpoint_id": "d9383cadb152",
   "strategy": "manual-commit",
   "branch": "phase4-search-polish",
-  "checkpoints_count": 2,
+  "checkpoints_count": 3,
   "files_touched": [
     "crates/mementor-lib/src/cache.rs",
     "crates/mementor-lib/src/lib.rs",
     "crates/mementor-lib/src/search.rs",
+    "crates/mementor-tui/src/app.rs",
+    "crates/mementor-tui/src/views/dashboard.rs",
+    "crates/mementor-tui/src/views/mod.rs",
     "crates/mementor-tui/src/views/search.rs",
+    "crates/mementor-tui/src/views/status_bar.rs",
+    "crates/mementor-tui/src/views/text_utils.rs",
     "history/2026-02-26_phase4-search-polish.md"
   ],
   "sessions": [
@@ -18,13 +23,20 @@
       "context": "/d9/383cadb152/0/context.md",
       "content_hash": "/d9/383cadb152/0/content_hash.txt",
       "prompt": "/d9/383cadb152/0/prompt.txt"
+    },
+    {
+      "metadata": "/d9/383cadb152/1/metadata.json",
+      "transcript": "/d9/383cadb152/1/full.jsonl",
+      "context": "/d9/383cadb152/1/context.md",
+      "content_hash": "/d9/383cadb152/1/content_hash.txt",
+      "prompt": "/d9/383cadb152/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 17,
-    "cache_creation_tokens": 53273,
-    "cache_read_tokens": 588578,
-    "output_tokens": 6489,
-    "api_call_count": 15
+    "input_tokens": 2504,
+    "cache_creation_tokens": 177225,
+    "cache_read_tokens": 3253035,
+    "output_tokens": 11468,
+    "api_call_count": 59
   }
 }
