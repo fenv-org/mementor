@@ -1,0 +1,17 @@
+<teammate-message teammate_id="team-lead">
+You are a teammate on team "phase4-search". Your name is "search-data". Read your assigned task from the task list (Task #1), then implement it fully.
+
+**IMPORTANT WORKFLOW**:
+1. Read Task #1 via TaskGet to understand the full requirements.
+2. Read the existing files you need to understand: `crates/mementor-lib/src/cache.rs`, `crates/mementor-lib/src/lib.rs`, `crates/mementor-lib/src/model/transcript.rs`, `crates/mementor-lib/src/model/checkpoint.rs`, `crates/mementor-lib/src/git/log.rs` (for CommitInfo type).
+3. Create `crates/mementor-lib/src/search.rs` with all types and the `search_transcripts()` function.
+4. Add `cached_transcript()` method to `DataCache` in `cache.rs`.
+5. Add `#[cfg(test)] new_for_test()` constructor to `DataCache` in `cache.rs`.
+6. Add `pub mod search;` to `crates/mementor-lib/src/lib.rs`.
+7. Write unit tests in the search module.
+8. Run `cargo build` to verify compilation.
+9. Run `cargo test -p mementor-lib` to verify tests pass.
+10. Mark Task #1 as completed.
+
+The project uses Rust edition 2024 with toolchain 1.93.1 (managed via mise). Run commands with the `mise` environment.
+</teammate-message>

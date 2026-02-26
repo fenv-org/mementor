@@ -1,0 +1,34 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "d9383cadb152",
+  "session_id": "14bc96ea-f384-4f12-8eff-b6705f714386",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-26T04:53:47.93922Z",
+  "branch": "phase4-search-polish",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "crates/mementor-lib/src/cache.rs",
+    "crates/mementor-lib/src/lib.rs",
+    "crates/mementor-lib/src/search.rs",
+    "crates/mementor-tui/src/views/search.rs",
+    "history/2026-02-26_phase4-search-polish.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "bd784de39a16",
+  "token_usage": {
+    "input_tokens": 17,
+    "cache_creation_tokens": 53273,
+    "cache_read_tokens": 588578,
+    "output_tokens": 6489,
+    "api_call_count": 15
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-26T04:53:47.807769Z",
+    "agent_lines": 826,
+    "human_added": 123,
+    "human_modified": 77,
+    "human_removed": 0,
+    "total_committed": 1026,
+    "agent_percentage": 80.50682261208577
+  }
+}
