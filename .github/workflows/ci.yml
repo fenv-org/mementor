@@ -91,6 +91,7 @@ jobs:
         run: cargo build --release ${{ matrix.cargo-target }}
 
   check-status:
+    name: "rust:check-status"
     needs: [build-and-test]
     if: always()
     runs-on: ubuntu-latest
