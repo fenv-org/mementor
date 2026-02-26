@@ -1,3 +1,4 @@
+pub mod ai_search;
 pub mod cache;
 pub mod context;
 pub mod entire;

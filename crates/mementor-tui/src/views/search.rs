@@ -1,5 +1,4 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-pub use mementor_lib::search::SearchScope;
 use ratatui::Frame;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
@@ -10,43 +9,49 @@ pub enum SearchOverlayAction {
     Close,
     /// Open the checkpoint at this index.
     OpenCheckpoint(usize),
-    /// Search query changed — App should re-run search.
-    QueryChanged,
-    /// Scope toggled — App should re-run search.
-    ScopeChanged,
+    /// Open a commit that has no associated checkpoint.
+    OpenCommit(String),
+    /// User pressed Enter — trigger an AI search with the current query.
+    TriggerSearch,
     /// No action needed.
     None,
 }
 
-/// Display-ready search result (converted from `SearchMatch` by the App layer).
+/// Display-ready search result (converted from `AiSearchResult` by the App layer).
 #[derive(Debug, Clone)]
 pub struct SearchMatchDisplay {
-    /// Checkpoint index (for navigation).
-    pub checkpoint_idx: usize,
-    /// Short checkpoint ID (first 12 chars).
-    pub checkpoint_id: String,
+    /// Checkpoint index (for navigation). `None` when the commit has no checkpoint.
+    pub checkpoint_idx: Option<usize>,
+    /// Commit SHA.
+    pub commit_sha: String,
     /// Commit subject or fallback description.
     pub title: String,
     /// Relative time string (e.g., "2h ago").
     pub time_ago: String,
-    /// Matching text snippet with surrounding context.
-    pub snippet: String,
-    /// Number of matches in this checkpoint.
-    pub match_count: usize,
+    /// AI-generated answer explaining the match.
+    pub answer: String,
+    /// Associated pull request (e.g., "#42").
+    pub pr: Option<String>,
 }
 
 /// State for the search overlay.
 pub struct SearchOverlayState {
     /// Current search input text.
     pub input: String,
-    /// Search results (updated on every input change by the App).
+    /// Search results (updated when AI search completes).
     pub results: Vec<SearchMatchDisplay>,
     /// Selected result index in the list.
     pub selected: usize,
-    /// Search scope toggle.
-    pub scope: SearchScope,
     /// List state for scrolling/selection.
     pub list_state: ListState,
+    /// Whether an AI search is currently running.
+    pub loading: bool,
+    /// Error message from the last search attempt.
+    pub error: Option<String>,
+    /// Elapsed ticks since search started (for spinner animation).
+    pub elapsed_ticks: usize,
+    /// The query that was last submitted for search.
+    pub last_searched_query: Option<String>,
 }
 
 impl Default for SearchOverlayState {
@@ -61,8 +66,11 @@ impl SearchOverlayState {
             input: String::new(),
             results: Vec::new(),
             selected: 0,
-            scope: SearchScope::AllBranches,
             list_state: ListState::default(),
+            loading: false,
+            error: None,
+            elapsed_ticks: 0,
+            last_searched_query: None,
         }
     }
 
@@ -70,8 +78,11 @@ impl SearchOverlayState {
         self.input.clear();
         self.results.clear();
         self.selected = 0;
-        self.scope = SearchScope::AllBranches;
         self.list_state.select(None);
+        self.loading = false;
+        self.error = None;
+        self.elapsed_ticks = 0;
+        self.last_searched_query = None;
     }
 
     fn select_next(&mut self) {
@@ -109,7 +120,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut SearchOverlayState) {
 
     frame.render_widget(Clear, popup_area);
 
-    let block = Block::default().borders(Borders::ALL).title(" Search ");
+    let block = Block::default().borders(Borders::ALL).title(" AI Search ");
     let inner = block.inner(popup_area);
     frame.render_widget(block, popup_area);
 
@@ -146,19 +157,51 @@ fn render_input_line(frame: &mut Frame, area: Rect, state: &SearchOverlayState) 
 }
 
 fn render_results(frame: &mut Frame, area: Rect, state: &mut SearchOverlayState) {
-    if state.input.is_empty() {
-        let hint = Paragraph::new("Type to search across all transcripts")
-            .style(Style::default().fg(Color::DarkGray))
+    // Loading state.
+    if state.loading {
+        let spinner_chars = ['|', '/', '-', '\\'];
+        let spinner = spinner_chars[state.elapsed_ticks % spinner_chars.len()];
+        let elapsed_secs = state.elapsed_ticks / 10; // ~100ms per tick
+        let text = format!("{spinner} Searching with AI... ({elapsed_secs}s)");
+        let hint = Paragraph::new(text)
+            .style(Style::default().fg(Color::Yellow))
             .alignment(Alignment::Center);
-        // Center vertically.
         let y_offset = area.height / 2;
         let hint_area = Rect::new(area.x, area.y + y_offset, area.width, 1);
         frame.render_widget(hint, hint_area);
         return;
     }
 
-    if state.results.is_empty() {
-        let hint = Paragraph::new("No results")
+    // Error state.
+    if let Some(err) = &state.error {
+        let line1 = Paragraph::new(truncate(err, area.width as usize - 4))
+            .style(Style::default().fg(Color::Red))
+            .alignment(Alignment::Center);
+        let line2 = Paragraph::new("Press Enter to retry")
+            .style(Style::default().fg(Color::DarkGray))
+            .alignment(Alignment::Center);
+        let y_offset = area.height / 2;
+        let area1 = Rect::new(area.x, area.y + y_offset.saturating_sub(1), area.width, 1);
+        let area2 = Rect::new(area.x, area.y + y_offset + 1, area.width, 1);
+        frame.render_widget(line1, area1);
+        frame.render_widget(line2, area2);
+        return;
+    }
+
+    // Empty state — no query submitted yet.
+    if state.input.is_empty() && state.last_searched_query.is_none() {
+        let hint = Paragraph::new("Type a query and press Enter to search with AI")
+            .style(Style::default().fg(Color::DarkGray))
+            .alignment(Alignment::Center);
+        let y_offset = area.height / 2;
+        let hint_area = Rect::new(area.x, area.y + y_offset, area.width, 1);
+        frame.render_widget(hint, hint_area);
+        return;
+    }
+
+    // No results.
+    if state.results.is_empty() && state.last_searched_query.is_some() {
+        let hint = Paragraph::new("No results found")
             .style(Style::default().fg(Color::DarkGray))
             .alignment(Alignment::Center);
         let y_offset = area.height / 2;
@@ -181,27 +224,30 @@ fn render_results(frame: &mut Frame, area: Rect, state: &mut SearchOverlayState)
         .enumerate()
         .map(|(i, result)| {
             let num = i + 1;
-            let match_suffix = if result.match_count > 1 {
-                format!(" ({} matches)", result.match_count)
+
+            // Line 1: [N] id — title (time_ago)
+            // Show PR number when available, otherwise commit SHA prefix.
+            let id_label = if let Some(pr) = &result.pr {
+                format!("PR{pr}")
             } else {
-                String::new()
+                let sha_len = result.commit_sha.len().min(12);
+                result.commit_sha[..sha_len].to_owned()
             };
 
-            // Line 1: [N] checkpoint_id — title (time_ago)
             let line1 = Line::from(vec![
                 Span::styled(
                     format!("[{num}] "),
                     Style::default().add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
-                    result.checkpoint_id.clone(),
+                    id_label,
                     Style::default()
                         .fg(Color::Cyan)
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
                     format!(
-                        " \u{2014} {} ({}){match_suffix}",
+                        " \u{2014} {} ({})",
                         truncate(&result.title, max_width.saturating_sub(30)),
                         result.time_ago,
                     ),
@@ -209,13 +255,13 @@ fn render_results(frame: &mut Frame, area: Rect, state: &mut SearchOverlayState)
                 ),
             ]);
 
-            // Line 2: "...snippet..."
-            let snippet = truncate(&result.snippet, max_width.saturating_sub(10));
+            // Line 2: answer.
             let line2 = Line::from(Span::styled(
-                format!("    \"{snippet}\""),
-                Style::default()
-                    .fg(Color::DarkGray)
-                    .add_modifier(Modifier::ITALIC),
+                format!(
+                    "    {}",
+                    truncate(&result.answer, max_width.saturating_sub(6))
+                ),
+                Style::default().fg(Color::Green),
             ));
 
             // Blank line separator.
@@ -236,31 +282,37 @@ fn render_help_bar(frame: &mut Frame, area: Rect, state: &SearchOverlayState) {
     let key_style = Style::default().fg(Color::Yellow);
     let desc_style = Style::default().fg(Color::DarkGray);
 
-    let scope_label = match state.scope {
-        SearchScope::AllBranches => "all",
-        SearchScope::CurrentBranch => "branch",
-    };
-
     let result_count = format!(
         "{} result{}",
         state.results.len(),
         if state.results.len() == 1 { "" } else { "s" }
     );
 
-    let left_spans = vec![
-        Span::styled("Enter", key_style),
-        Span::styled(" Open  ", desc_style),
-        Span::styled("\u{2191}/\u{2193}", key_style),
-        Span::styled(" Navigate  ", desc_style),
-        Span::styled("Tab", key_style),
-        Span::styled(format!(" Scope: {scope_label}  "), desc_style),
-        Span::styled("Esc", key_style),
-        Span::styled(" Close", desc_style),
-    ];
+    let left_spans = if state.loading {
+        vec![
+            Span::styled("Esc", key_style),
+            Span::styled(" Cancel", desc_style),
+        ]
+    } else if state.results.is_empty() {
+        vec![
+            Span::styled("Enter", key_style),
+            Span::styled(" Search  ", desc_style),
+            Span::styled("Esc", key_style),
+            Span::styled(" Close", desc_style),
+        ]
+    } else {
+        vec![
+            Span::styled("Enter", key_style),
+            Span::styled(" Open  ", desc_style),
+            Span::styled("\u{2191}/\u{2193}", key_style),
+            Span::styled(" Navigate  ", desc_style),
+            Span::styled("Esc", key_style),
+            Span::styled(" Close", desc_style),
+        ]
+    };
 
     let right_span = Span::styled(result_count, desc_style);
 
-    // Render left-aligned hints and right-aligned count.
     let left = Paragraph::new(Line::from(left_spans));
     let right = Paragraph::new(Line::from(right_span)).alignment(Alignment::Right);
 
@@ -273,9 +325,6 @@ fn render_help_bar(frame: &mut Frame, area: Rect, state: &SearchOverlayState) {
 // ---------------------------------------------------------------------------
 
 /// Handle key events for the search overlay.
-///
-/// The search overlay is always in "input mode": printable characters are
-/// appended to the query. Arrow keys and Ctrl-n/Ctrl-p navigate results.
 pub fn handle_key(key: KeyEvent, state: &mut SearchOverlayState) -> SearchOverlayAction {
     // Ctrl-modified chars first.
     if key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -292,7 +341,7 @@ pub fn handle_key(key: KeyEvent, state: &mut SearchOverlayState) -> SearchOverla
                 state.input.clear();
                 state.selected = 0;
                 state.list_state.select(None);
-                SearchOverlayAction::QueryChanged
+                SearchOverlayAction::None
             }
             _ => SearchOverlayAction::None,
         };
@@ -302,19 +351,21 @@ pub fn handle_key(key: KeyEvent, state: &mut SearchOverlayState) -> SearchOverla
         KeyCode::Esc => SearchOverlayAction::Close,
 
         KeyCode::Enter => {
-            if let Some(result) = state.results.get(state.selected) {
-                SearchOverlayAction::OpenCheckpoint(result.checkpoint_idx)
-            } else {
-                SearchOverlayAction::None
+            // If results exist, open the selected one.
+            if !state.results.is_empty()
+                && let Some(result) = state.results.get(state.selected)
+            {
+                if let Some(idx) = result.checkpoint_idx {
+                    return SearchOverlayAction::OpenCheckpoint(idx);
+                }
+                return SearchOverlayAction::OpenCommit(result.commit_sha.clone());
             }
-        }
-
-        KeyCode::Tab => {
-            state.scope = match state.scope {
-                SearchScope::AllBranches => SearchScope::CurrentBranch,
-                SearchScope::CurrentBranch => SearchScope::AllBranches,
-            };
-            SearchOverlayAction::ScopeChanged
+            // Otherwise, trigger search if there's a query.
+            if state.input.is_empty() {
+                SearchOverlayAction::None
+            } else {
+                SearchOverlayAction::TriggerSearch
+            }
         }
 
         KeyCode::Down => {
@@ -329,21 +380,20 @@ pub fn handle_key(key: KeyEvent, state: &mut SearchOverlayState) -> SearchOverla
 
         KeyCode::Backspace => {
             state.input.pop();
-            state.selected = 0;
-            if !state.results.is_empty() {
-                state.list_state.select(Some(0));
+            // Clear results when query changes.
+            if state.input.is_empty() {
+                state.results.clear();
+                state.last_searched_query = None;
+                state.list_state.select(None);
+                state.error = None;
             }
-            SearchOverlayAction::QueryChanged
+            SearchOverlayAction::None
         }
 
         // All other printable chars go to the input buffer.
         KeyCode::Char(c) => {
             state.input.push(c);
-            state.selected = 0;
-            if !state.results.is_empty() {
-                state.list_state.select(Some(0));
-            }
-            SearchOverlayAction::QueryChanged
+            SearchOverlayAction::None
         }
 
         _ => SearchOverlayAction::None,

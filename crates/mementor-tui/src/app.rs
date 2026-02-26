@@ -5,6 +5,7 @@ use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
+use mementor_lib::ai_search::AiSearchResult;
 use mementor_lib::cache::DataCache;
 use mementor_lib::git::branch::list_branches;
 use mementor_lib::git::diff::FileStatus;
@@ -13,6 +14,7 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::prelude::*;
 use ratatui::widgets::ListState;
+use tokio::task::JoinHandle;
 
 use crate::views::{
     branch_popup, dashboard, detail, diff_view, git_log, search, status_bar, transcript,
@@ -56,6 +58,7 @@ pub struct App {
     // Search overlay.
     pub search_open: bool,
     pub search_state: search::SearchOverlayState,
+    ai_search_handle: Option<JoinHandle<Result<Vec<AiSearchResult>>>>,
 }
 
 impl App {
@@ -80,6 +83,7 @@ impl App {
             loaded_transcript: None,
             search_open: false,
             search_state: search::SearchOverlayState::new(),
+            ai_search_handle: None,
         }
     }
 
@@ -102,6 +106,9 @@ impl App {
     pub async fn run(&mut self, terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
         loop {
             terminal.draw(|frame| self.render(frame))?;
+
+            // Poll AI search progress.
+            self.poll_ai_search();
 
             if event::poll(std::time::Duration::from_millis(100))?
                 && let Event::Key(key) = event::read()?
@@ -222,7 +229,7 @@ impl App {
                 let _ = self.cache.refresh().await;
                 self.clamp_selection();
             }
-            KeyCode::Char('/') => self.open_search().await,
+            KeyCode::Char('/') => self.open_search(),
             KeyCode::Char('g') => {
                 self.git_log_state.reset(self.cache.commits().len());
                 self.view = View::GitLog;
@@ -360,76 +367,133 @@ impl App {
         self.loaded_transcript = None;
     }
 
-    async fn open_search(&mut self) {
+    fn open_search(&mut self) {
         self.search_state.reset();
-        // Pre-load all transcripts so search can scan them synchronously.
-        self.preload_all_transcripts().await;
         self.search_open = true;
     }
 
     async fn handle_search_action(&mut self, action: search::SearchOverlayAction) {
         match action {
             search::SearchOverlayAction::Close => {
+                self.cancel_ai_search();
                 self.search_open = false;
             }
             search::SearchOverlayAction::OpenCheckpoint(idx) => {
                 self.search_open = false;
                 self.open_detail(idx).await;
             }
-            search::SearchOverlayAction::QueryChanged
-            | search::SearchOverlayAction::ScopeChanged => {
-                self.run_search();
+            search::SearchOverlayAction::OpenCommit(hash) => {
+                self.search_open = false;
+                self.open_diff(&hash).await;
+            }
+            search::SearchOverlayAction::TriggerSearch => {
+                self.start_ai_search();
             }
             search::SearchOverlayAction::None => {}
         }
     }
 
-    fn run_search(&mut self) {
+    fn start_ai_search(&mut self) {
+        // Cancel any in-flight search.
+        self.cancel_ai_search();
+
+        let query = self.search_state.input.clone();
+        self.search_state.loading = true;
+        self.search_state.error = None;
+        self.search_state.elapsed_ticks = 0;
+        self.search_state.results.clear();
+        self.search_state.list_state.select(None);
+        self.search_state.last_searched_query = Some(query.clone());
+
+        self.ai_search_handle = Some(mementor_lib::ai_search::spawn_ai_search(query));
+    }
+
+    fn cancel_ai_search(&mut self) {
+        if let Some(handle) = self.ai_search_handle.take() {
+            handle.abort();
+        }
+        self.search_state.loading = false;
+    }
+
+    fn poll_ai_search(&mut self) {
+        // Increment spinner tick while loading.
+        if self.search_state.loading {
+            self.search_state.elapsed_ticks += 1;
+        }
+
+        let Some(handle) = &self.ai_search_handle else {
+            return;
+        };
+        if !handle.is_finished() {
+            return;
+        }
+
+        // Take the handle — we know it's finished so try_join is instant.
+        let handle = self.ai_search_handle.take().unwrap();
+        self.search_state.loading = false;
+
+        // Use now_or_never since we confirmed is_finished().
+        let Some(join_result) = futures::FutureExt::now_or_never(handle) else {
+            return;
+        };
+        match join_result {
+            Ok(Ok(results)) => self.apply_ai_results(results),
+            Ok(Err(e)) => {
+                self.search_state.error = Some(format!("{e}"));
+            }
+            Err(e) if e.is_cancelled() => {
+                // Search was cancelled — do nothing.
+            }
+            Err(e) => {
+                self.search_state.error = Some(format!("search task panicked: {e}"));
+            }
+        }
+    }
+
+    fn apply_ai_results(&mut self, results: Vec<AiSearchResult>) {
         use crate::views::text_utils::format_relative_time;
 
+        let checkpoints = self.cache.checkpoints();
         let commits = self.cache.commits();
-        let matches = mementor_lib::search::search_transcripts(
-            &self.cache,
-            &self.search_state.input,
-            self.search_state.scope,
-            &self.selected_branch,
-            commits,
-        );
 
-        self.search_state.results = matches
+        self.search_state.results = results
             .into_iter()
-            .map(|m| search::SearchMatchDisplay {
-                checkpoint_idx: m.checkpoint_idx,
-                checkpoint_id: m.checkpoint_id,
-                title: m.commit_subject.unwrap_or_else(|| "untitled".to_owned()),
-                time_ago: format_relative_time(&m.created_at),
-                snippet: m.matching_line,
-                match_count: m.match_count,
+            .filter_map(|r| {
+                let sha = r.source.commit_sha.as_deref()?;
+
+                // Find commit by prefix match.
+                let commit = commits
+                    .iter()
+                    .find(|c| c.hash.starts_with(sha) || sha.starts_with(&c.hash));
+
+                let title = commit.map_or_else(|| "untitled".to_owned(), |c| c.subject.clone());
+                let time_ago = commit
+                    .map(|c| format_relative_time(&c.date))
+                    .unwrap_or_default();
+
+                // Find checkpoint that contains this commit.
+                let checkpoint_idx = commit.and_then(|cm| {
+                    checkpoints
+                        .iter()
+                        .position(|cp| cp.commit_hashes.contains(&cm.hash))
+                });
+
+                Some(search::SearchMatchDisplay {
+                    checkpoint_idx,
+                    commit_sha: sha.to_owned(),
+                    title,
+                    time_ago,
+                    answer: r.answer,
+                    pr: r.source.pr,
+                })
             })
             .collect();
 
-        // Reset selection to top.
         self.search_state.selected = 0;
         if self.search_state.results.is_empty() {
             self.search_state.list_state.select(None);
         } else {
             self.search_state.list_state.select(Some(0));
-        }
-    }
-
-    async fn preload_all_transcripts(&mut self) {
-        let blob_paths: Vec<String> = self
-            .cache
-            .checkpoints()
-            .iter()
-            .flat_map(|cp| cp.sessions.iter())
-            .filter(|s| !s.blob_path.is_empty())
-            .map(|s| s.blob_path.clone())
-            .collect();
-
-        for path in &blob_paths {
-            // Load transcript if not already cached (ignoring errors).
-            let _ = self.cache.transcript(path).await;
         }
     }
 
