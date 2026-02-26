@@ -16,7 +16,27 @@ env:
   MISE_DATA_DIR: ~/.local/share/mise
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3
+        id: filter
+        with:
+          filters: |
+            rust:
+              - '**/*.rs'
+              - '**/Cargo.toml'
+              - '**/Cargo.lock'
+              - 'mise.toml'
+              - '.github/workflows/ci.yml'
+              - '.github/actions/**'
+
   build-and-test:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: macos-latest
     name: macOS (${{ matrix.arch }})
 
@@ -69,3 +89,18 @@ jobs:
 
       - name: Build (release)
         run: cargo build --release ${{ matrix.cargo-target }}
+
+  check-status:
+    needs: [build-and-test]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check outcome
+        run: |
+          if [ "${{ needs.build-and-test.result }}" = "failure" ] || \
+             [ "${{ needs.build-and-test.result }}" = "cancelled" ]; then
+            echo "CI check failed or was cancelled"
+            exit 1
+          else
+            echo "CI check passed or was skipped"
+          fi
