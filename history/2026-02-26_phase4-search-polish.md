@@ -100,10 +100,13 @@ polish.
 - **Dashboard empty state**: The empty list already renders a bordered box.
   A centered "No checkpoints" message can be added later if needed.
 
+## Subsequent Work
+
+- **Agentic AI search**: The text-based transcript search was replaced with an
+  agentic `claude -p` approach. See
+  [2026-02-26_agentic-ai-search.md](2026-02-26_agentic-ai-search.md).
+
 ## Future Work
 
 - File history filter ("which sessions touched this file?" via `f` key)
-- Regex search support
-- Search result persistence (remember last query)
-- Pre-built keyword index for faster search on large histories
 - Dashboard empty state message
