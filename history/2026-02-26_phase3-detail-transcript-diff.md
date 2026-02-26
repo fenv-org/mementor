@@ -70,6 +70,12 @@ their associated code changes.
 - [x] Update status bar key hints per active view
 - [x] Integrate all agent work
 
+### Code review fixes
+- [x] Fix `truncate()` in detail.rs — use `char_indices` instead of byte slicing (panics on non-ASCII)
+- [x] Fix commit index mismatch — use filtered `relevant_commit_hashes()` instead of raw `checkpoint.commit_hashes`
+- [x] Fix `format_short_date` in git_log.rs — use jiff for date parsing instead of raw string slicing
+- [x] Fix hardcoded "M" file badge in detail.rs — derive actual status from cached diffs
+
 ### Verification
 - [x] `cargo check` passes
 - [x] `cargo clippy -- -D warnings` passes

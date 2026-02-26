@@ -154,12 +154,23 @@ pub fn handle_key(key: KeyEvent, state: &mut GitLogState, commits: &[CommitInfo]
 /// Format a git date string (e.g. "2026-02-20 10:30:00 +0900") into a
 /// shorter display form (e.g. "2026-02-20 10:30").
 fn format_short_date(date: &str) -> String {
-    // Take date and time up to minutes, dropping seconds and timezone.
-    if date.len() >= 16 {
-        date[..16].to_owned()
-    } else {
-        date.to_owned()
-    }
+    // Parse with jiff to validate and extract components, falling back to raw
+    // string on failure.
+    jiff::fmt::strtime::parse("%Y-%m-%d %H:%M:%S %z", date)
+        .and_then(|bdt| bdt.to_datetime())
+        .map_or_else(
+            |_| date.to_owned(),
+            |dt| {
+                format!(
+                    "{:04}-{:02}-{:02} {:02}:{:02}",
+                    dt.year(),
+                    dt.month(),
+                    dt.day(),
+                    dt.hour(),
+                    dt.minute(),
+                )
+            },
+        )
 }
 
 #[cfg(test)]

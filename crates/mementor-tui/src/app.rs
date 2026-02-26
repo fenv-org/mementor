@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::io::Stdout;
 
 use anyhow::Result;
@@ -6,7 +7,8 @@ use crossterm::execute;
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use mementor_lib::cache::DataCache;
 use mementor_lib::git::branch::list_branches;
-use mementor_lib::model::TranscriptEntry;
+use mementor_lib::git::diff::FileStatus;
+use mementor_lib::model::{CheckpointMeta, TranscriptEntry};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::prelude::*;
@@ -123,12 +125,14 @@ impl App {
                     let cp = cp.clone();
                     let commits = self.cache.commits().to_vec();
                     let transcript_ref = self.loaded_transcript.as_deref();
+                    let file_statuses = build_file_statuses(&self.cache, &cp);
                     detail::render(
                         frame,
                         chunks[0],
                         &mut self.detail_state,
                         &cp,
                         &commits,
+                        &file_statuses,
                         transcript_ref,
                     );
                 }
@@ -384,4 +388,21 @@ impl App {
         self.branch_list_state.select(Some(selected_index));
         self.branch_popup_open = true;
     }
+}
+
+/// Build a map of file path → `FileStatus` from cached diffs for the
+/// checkpoint's commit hashes.
+fn build_file_statuses(
+    cache: &DataCache,
+    checkpoint: &CheckpointMeta,
+) -> HashMap<String, FileStatus> {
+    let mut statuses = HashMap::new();
+    for hash in &checkpoint.commit_hashes {
+        if let Some(diffs) = cache.cached_diffs(hash) {
+            for diff in diffs {
+                statuses.entry(diff.path.clone()).or_insert(diff.status);
+            }
+        }
+    }
+    statuses
 }

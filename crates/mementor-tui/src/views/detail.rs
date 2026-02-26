@@ -1,4 +1,8 @@
+use std::collections::HashMap;
+use std::hash::BuildHasher;
+
 use crossterm::event::{KeyCode, KeyEvent};
+use mementor_lib::git::diff::FileStatus;
 use mementor_lib::git::log::CommitInfo;
 use mementor_lib::model::{CheckpointMeta, ContentBlock, MessageRole, TranscriptEntry};
 use ratatui::Frame;
@@ -89,13 +93,14 @@ impl DetailState {
 /// |   727be48 update   |                                              |
 /// +--------------------+----------------------------------------------+
 /// ```
-#[allow(clippy::too_many_lines)]
-pub fn render(
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
+pub fn render<S: BuildHasher>(
     frame: &mut Frame,
     area: Rect,
     state: &mut DetailState,
     checkpoint: &CheckpointMeta,
     commits: &[CommitInfo],
+    file_statuses: &HashMap<String, FileStatus, S>,
     transcript_entries: Option<&[TranscriptEntry]>,
 ) {
     // Header.
@@ -117,16 +122,24 @@ pub fn render(
         .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
         .split(inner_area);
 
-    render_sidebar(frame, h_chunks[0], state, checkpoint, commits);
+    render_sidebar(
+        frame,
+        h_chunks[0],
+        state,
+        checkpoint,
+        commits,
+        file_statuses,
+    );
     render_transcript_pane(frame, h_chunks[1], state, transcript_entries);
 }
 
-fn render_sidebar(
+fn render_sidebar<S: BuildHasher>(
     frame: &mut Frame,
     area: Rect,
     state: &mut DetailState,
     checkpoint: &CheckpointMeta,
     commits: &[CommitInfo],
+    file_statuses: &HashMap<String, FileStatus, S>,
 ) {
     // Split sidebar into 3 sections: Sessions, Files, Commits.
     let chunks = Layout::default()
@@ -172,8 +185,12 @@ fn render_sidebar(
         .files_touched
         .iter()
         .map(|f| {
-            // Determine badge from commits' diffs if available; fallback to M.
-            let badge = "M";
+            let badge = match file_statuses.get(f.as_str()) {
+                Some(FileStatus::Added) => "A",
+                Some(FileStatus::Modified) | None => "M",
+                Some(FileStatus::Deleted) => "D",
+                Some(FileStatus::Renamed) => "R",
+            };
             let line = format!("  {badge} {f}");
             ListItem::new(Line::from(Span::raw(line)))
         })
@@ -378,14 +395,11 @@ pub fn handle_key(
             DetailAction::OpenTranscript { session_idx }
         }
         KeyCode::Char('d') => {
+            let hashes = relevant_commit_hashes(checkpoint, commits);
             if let Some(idx) = state.commit_list_state.selected() {
-                let hash = checkpoint
-                    .commit_hashes
-                    .get(idx)
-                    .cloned()
-                    .unwrap_or_default();
+                let hash = hashes.get(idx).cloned().unwrap_or_default();
                 DetailAction::OpenDiff { commit_hash: hash }
-            } else if let Some(hash) = checkpoint.commit_hashes.first() {
+            } else if let Some(hash) = hashes.first() {
                 DetailAction::OpenDiff {
                     commit_hash: hash.clone(),
                 }
@@ -453,23 +467,20 @@ fn handle_scroll_up(
 fn handle_enter(
     state: &DetailState,
     checkpoint: &CheckpointMeta,
-    _commits: &[CommitInfo],
+    commits: &[CommitInfo],
 ) -> DetailAction {
+    let hashes = relevant_commit_hashes(checkpoint, commits);
     match state.focus {
         DetailPanel::Commits => {
             if let Some(idx) = state.commit_list_state.selected() {
-                let hash = checkpoint
-                    .commit_hashes
-                    .get(idx)
-                    .cloned()
-                    .unwrap_or_default();
+                let hash = hashes.get(idx).cloned().unwrap_or_default();
                 DetailAction::OpenDiff { commit_hash: hash }
             } else {
                 DetailAction::None
             }
         }
         DetailPanel::Files => {
-            if let Some(hash) = checkpoint.commit_hashes.first() {
+            if let Some(hash) = hashes.first() {
                 DetailAction::OpenDiff {
                     commit_hash: hash.clone(),
                 }
@@ -499,14 +510,23 @@ fn scroll_list_up(list_state: &mut ListState) {
     list_state.select(Some(i));
 }
 
-fn truncate(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len {
-        s.to_owned()
-    } else {
-        let mut truncated = s[..max_len].to_owned();
-        truncated.push_str("...");
-        truncated
+/// Return the commit hashes from the checkpoint that are actually present in
+/// the `commits` list, in the same order as displayed in the sidebar.
+fn relevant_commit_hashes(checkpoint: &CheckpointMeta, commits: &[CommitInfo]) -> Vec<String> {
+    checkpoint
+        .commit_hashes
+        .iter()
+        .filter(|h| commits.iter().any(|c| &c.hash == *h || &c.short_hash == *h))
+        .cloned()
+        .collect()
+}
+
+fn truncate(s: &str, max_chars: usize) -> String {
+    if s.chars().count() <= max_chars {
+        return s.to_owned();
     }
+    let t: String = s.chars().take(max_chars).collect();
+    format!("{t}...")
 }
 
 #[allow(clippy::cast_precision_loss)]
