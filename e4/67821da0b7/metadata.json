@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "e467821da0b7",
+  "strategy": "manual-commit",
+  "branch": "phase3-detail-transcript-diff",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "crates/mementor-lib/src/cache.rs",
+    "crates/mementor-lib/src/entire/checkpoint.rs",
+    "crates/mementor-lib/src/model/checkpoint.rs",
+    "crates/mementor-lib/src/model/mod.rs",
+    "history/2026-02-26_phase3-detail-transcript-diff.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/e4/67821da0b7/0/metadata.json",
+      "transcript": "/e4/67821da0b7/0/full.jsonl",
+      "context": "/e4/67821da0b7/0/context.md",
+      "content_hash": "/e4/67821da0b7/0/content_hash.txt",
+      "prompt": "/e4/67821da0b7/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 709,
+    "cache_creation_tokens": 945178,
+    "cache_read_tokens": 46788456,
+    "output_tokens": 88501,
+    "api_call_count": 433
+  }
+}

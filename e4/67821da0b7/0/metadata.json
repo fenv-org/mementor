@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "e467821da0b7",
+  "session_id": "81b5b775-82cd-4a78-a978-0dc8b7b2f53e",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-26T01:48:32.610355Z",
+  "branch": "phase3-detail-transcript-diff",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "crates/mementor-lib/src/cache.rs",
+    "crates/mementor-lib/src/entire/checkpoint.rs",
+    "crates/mementor-lib/src/model/checkpoint.rs",
+    "crates/mementor-lib/src/model/mod.rs",
+    "history/2026-02-26_phase3-detail-transcript-diff.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "7e51076996f6",
+  "token_usage": {
+    "input_tokens": 709,
+    "cache_creation_tokens": 945178,
+    "cache_read_tokens": 46788456,
+    "output_tokens": 88501,
+    "api_call_count": 433
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-26T01:48:28.786282Z",
+    "agent_lines": 296,
+    "human_added": 0,
+    "human_modified": 15,
+    "human_removed": 2,
+    "total_committed": 311,
+    "agent_percentage": 95.17684887459808
+  },
+  "transcript_path": ".claude/projects/-Users-heejoon-kang-dev-git-fenv-org-mementor-agent1/81b5b775-82cd-4a78-a978-0dc8b7b2f53e.jsonl"
+}
