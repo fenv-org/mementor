@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "8e7f30fed7ff",
+  "strategy": "manual-commit",
+  "branch": "claude-md-improvements",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".github/workflows/ci.yml",
+    ".github/workflows/deno.yml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/8e/7f30fed7ff/0/metadata.json",
+      "transcript": "/8e/7f30fed7ff/0/full.jsonl",
+      "context": "/8e/7f30fed7ff/0/context.md",
+      "content_hash": "/8e/7f30fed7ff/0/content_hash.txt",
+      "prompt": "/8e/7f30fed7ff/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 812,
+    "cache_creation_tokens": 138408,
+    "cache_read_tokens": 6771723,
+    "output_tokens": 22159,
+    "api_call_count": 86
+  }
+}

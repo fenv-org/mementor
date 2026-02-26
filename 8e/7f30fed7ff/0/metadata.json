@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "8e7f30fed7ff",
+  "session_id": "b74fb8cb-2904-417c-8996-95902041abc9",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-26T04:56:32.761795Z",
+  "branch": "claude-md-improvements",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".github/workflows/ci.yml",
+    ".github/workflows/deno.yml"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "d7d838733aa4",
+  "token_usage": {
+    "input_tokens": 812,
+    "cache_creation_tokens": 138408,
+    "cache_read_tokens": 6771723,
+    "output_tokens": 22159,
+    "api_call_count": 86
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-26T04:56:32.351946Z",
+    "agent_lines": 0,
+    "human_added": 2,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 2,
+    "agent_percentage": 0
+  },
+  "transcript_path": ".claude/projects/-Users-heejoon-kang-dev-git-fenv-org-mementor/b74fb8cb-2904-417c-8996-95902041abc9.jsonl"
+}
