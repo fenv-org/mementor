@@ -75,6 +75,8 @@ their associated code changes.
 - [x] Fix commit index mismatch — use filtered `relevant_commit_hashes()` instead of raw `checkpoint.commit_hashes`
 - [x] Fix `format_short_date` in git_log.rs — use jiff for date parsing instead of raw string slicing
 - [x] Fix hardcoded "M" file badge in detail.rs — derive actual status from cached diffs
+- [x] Add `views/text_utils.rs` — display-width-aware `truncate()` and `wrap_str()` using `unicode-width`
+- [x] Add 22 tests for multi-width character handling (CJK, emoji, Hindi, mixed, visual column alignment)
 
 ### Verification
 - [x] `cargo check` passes

@@ -17,3 +17,4 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 futures = "0.3.32"
 jiff = "0.2.21"
+unicode-width = "0.2"

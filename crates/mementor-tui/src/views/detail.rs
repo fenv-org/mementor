@@ -521,12 +521,8 @@ fn relevant_commit_hashes(checkpoint: &CheckpointMeta, commits: &[CommitInfo]) -
         .collect()
 }
 
-fn truncate(s: &str, max_chars: usize) -> String {
-    if s.chars().count() <= max_chars {
-        return s.to_owned();
-    }
-    let t: String = s.chars().take(max_chars).collect();
-    format!("{t}...")
+fn truncate(s: &str, max_width: usize) -> String {
+    super::text_utils::truncate(s, max_width)
 }
 
 #[allow(clippy::cast_precision_loss)]

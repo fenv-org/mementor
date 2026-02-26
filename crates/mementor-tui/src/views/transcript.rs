@@ -710,23 +710,10 @@ fn toggle_nearest_tool(state: &mut TranscriptViewState) {
 // Internal: text utilities
 // ---------------------------------------------------------------------------
 
-fn truncate(s: &str, max_chars: usize) -> String {
-    if s.chars().count() <= max_chars {
-        return s.to_owned();
-    }
-    let t: String = s.chars().take(max_chars).collect();
-    format!("{t}...")
+fn truncate(s: &str, max_width: usize) -> String {
+    super::text_utils::truncate(s, max_width)
 }
 
 fn wrap_str(s: &str, width: usize) -> Vec<String> {
-    if s.is_empty() {
-        return vec![String::new()];
-    }
-    let mut result = Vec::new();
-    let mut chars = s.chars().peekable();
-    while chars.peek().is_some() {
-        let chunk: String = chars.by_ref().take(width).collect();
-        result.push(chunk);
-    }
-    result
+    super::text_utils::wrap_str(s, width)
 }
