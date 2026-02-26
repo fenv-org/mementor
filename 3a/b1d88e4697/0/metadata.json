@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "3ab1d88e4697",
+  "session_id": "14bc96ea-f384-4f12-8eff-b6705f714386",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-26T14:02:29.331745Z",
+  "branch": "phase4-search-polish",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "history/2026-02-26_phase4-search-polish.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "bd784de39a16",
+  "initial_attribution": {
+    "calculated_at": "2026-02-26T14:02:29.316379Z",
+    "agent_lines": 6,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 6,
+    "agent_percentage": 100
+  }
+}
